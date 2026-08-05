@@ -1,0 +1,10 @@
+.env
+.env.deepseek
+secrets/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+logs/*.log
+workspace/*
+!workspace/.gitkeep
