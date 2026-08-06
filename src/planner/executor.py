@@ -12,9 +12,14 @@ from src.agent.protocol import FinalAnswer, extract_first_json_object, parse_mod
 from src.config import WORKSPACE_DIR
 from src.logging_utils import log_event
 from src.planner.models import ExecutionResult, Plan, PlanStatus, PlanStep, ReplanRecord, RiskLevel, StepStatus
-from src.planner.prompts import build_argument_resolution_prompt, build_final_answer_prompt
+from src.planner.prompts import (
+    build_argument_resolution_prompt,
+    build_cited_report_prompt,
+    build_final_answer_prompt,
+)
 from src.planner.repository import PlanRepository
 from src.planner.validator import PlanValidator
+from src.tools.file_tools import resolve_workspace_path
 from src.tools.registry import ToolRegistry
 
 
@@ -94,7 +99,7 @@ class PlanExecutor:
             try:
                 resolved_arguments = self._resolve_arguments_if_needed(plan, step)
                 tool.argument_schema.model_validate(resolved_arguments)
-                result = self._execute_tool(step.tool_name, resolved_arguments)
+                result = self._execute_tool(plan, step.tool_name, resolved_arguments)
                 step.arguments = resolved_arguments
                 if result.get("ok"):
                     step.actual_output = result["result"]
@@ -180,11 +185,17 @@ class PlanExecutor:
             overwrite = bool(step.arguments.get("overwrite", False))
             if path and overwrite and (WORKSPACE_DIR / str(path)).exists():
                 return "overwriting an existing file requires confirmation"
+        if step.tool_name == "write_cited_report":
+            path = step.arguments.get("report_file")
+            if path and (WORKSPACE_DIR / str(path)).exists():
+                return "overwriting an existing report requires confirmation"
         return None
 
-    def _execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _execute_tool(self, plan: Plan, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if tool_name == "transform_text":
             return self._execute_transform_text(arguments)
+        if tool_name == "write_cited_report":
+            return self._execute_cited_report(plan, arguments)
         return self.registry.execute(tool_name, arguments)
 
     def _execute_transform_text(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -200,6 +211,46 @@ class PlanExecutor:
             return {"ok": True, "result": output.strip()}
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def _execute_cited_report(self, plan: Plan, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self.llm_client is None:
+            return {"ok": False, "error": "write_cited_report requires llm_client"}
+        collected = self._research_materials(plan)
+        if not collected:
+            return {"ok": False, "error": "所有搜索均未返回结果，无法生成报告。"}
+        try:
+            report_file = str(arguments["report_file"])
+            path = resolve_workspace_path(report_file)
+            prompt = build_cited_report_prompt(
+                topic=str(arguments["topic"]),
+                sub_topics=[str(item) for item in arguments.get("sub_topics", [])],
+                materials=json.dumps(collected, ensure_ascii=False, indent=2),
+                report_file=report_file,
+            )
+            output = self.llm_client.chat([{"role": "user", "content": prompt}]).strip()
+            if not output:
+                return {"ok": False, "error": "报告生成为空。"}
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(output, encoding="utf-8")
+            source_count = sum(len(entry["results"]) for entry in collected)
+            return {"ok": True, "result": f"报告已保存到 {report_file}（引用 {source_count} 个来源）"}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def _research_materials(self, plan: Plan) -> list[dict[str, Any]]:
+        materials: list[dict[str, Any]] = []
+        for step in plan.steps:
+            if step.status == StepStatus.COMPLETED and step.tool_name == "search_web" and step.actual_output:
+                try:
+                    results = (
+                        json.loads(step.actual_output)
+                        if isinstance(step.actual_output, str)
+                        else step.actual_output
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    results = []
+                materials.append({"sub_topic": step.description.removeprefix("搜索："), "results": results})
+        return materials
 
     def _confirm(self, plan: Plan, step: PlanStep, risk: RiskLevel, reason: str) -> bool:
         if self.confirmation_callback is None:

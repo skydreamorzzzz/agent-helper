@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, ValidationError
 from src.agent.protocol import ModelOutputParseError, extract_first_json_object
 from src.planner.models import Plan, PlanStep
 from src.planner.prompts import build_planner_prompt
+from src.planner.research import create_research_plan
 from src.tools.registry import ToolRegistry
 
 
@@ -56,5 +57,14 @@ class StructuredPlanner:
             assumptions=raw_plan.assumptions,
             unresolved_questions=raw_plan.unresolved_questions,
             final_output_requirement=raw_plan.final_output_requirement,
+        )
+
+    def build_research_plan(self, user_input: str, *, memory_context: str = "") -> Plan:
+        return create_research_plan(
+            self.llm_client,
+            self.registry,
+            user_input,
+            memory_context=memory_context,
+            max_steps=self.max_steps,
         )
 

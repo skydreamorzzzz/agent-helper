@@ -13,6 +13,7 @@ class Route(StrEnum):
     DIRECT_ANSWER = "direct_answer"
     SINGLE_TOOL = "single_tool"
     PLANNED_TASK = "planned_task"
+    DEEP_RESEARCH = "deep_research"
     CLARIFICATION = "clarification"
 
 

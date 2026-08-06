@@ -30,6 +30,7 @@ class Settings:
     planner_max_replans: int = 2
     tool_max_retries: int = 1
     confirm_write_actions: bool = True
+    tavily_api_key: str = ""
 
 
 def load_settings() -> Settings:
@@ -62,6 +63,7 @@ def load_settings() -> Settings:
         planner_max_replans=int(os.getenv("PLANNER_MAX_REPLANS", "2")),
         tool_max_retries=int(os.getenv("TOOL_MAX_RETRIES", "1")),
         confirm_write_actions=os.getenv("CONFIRM_WRITE_ACTIONS", "true").lower() == "true",
+        tavily_api_key=os.getenv("TAVILY_API_KEY", "").strip(),
     )
 
 

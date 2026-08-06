@@ -8,3 +8,5 @@ __pycache__/
 logs/*.log
 workspace/*
 !workspace/.gitkeep
+evals/data/
+evals/results/

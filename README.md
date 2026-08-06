@@ -39,6 +39,7 @@ PLANNER_MAX_STEPS=8
 PLANNER_MAX_REPLANS=2
 TOOL_MAX_RETRIES=1
 CONFIRM_WRITE_ACTIONS=true
+TAVILY_API_KEY=paste-your-tavily-api-key-here
 ```
 
 模型名称、地址、Key 和超时时间全部从 `.env` 读取，代码中不写死。
@@ -59,6 +60,8 @@ secrets/deepseek_api_key
 ```
 
 `secrets/` 已在 `.gitignore` 中，不会提交到 Git。也可以不用 key 文件，直接在 `.env` 中设置 `LOCAL_LLM_API_KEY`。
+
+深度调研功能需要额外的 `TAVILY_API_KEY`（在 [Tavily](https://tavily.com) 注册后获取，免费额度 1000 次/月）。不配置该 key 时，普通对话和普通计划不受影响，只有触发调研请求时才会提示缺少配置。
 
 ## 启动
 
@@ -115,6 +118,21 @@ docs/pipeline.md
 - `calculator`：通过 AST 白名单安全计算基础数学表达式，不使用不受限制的 `eval`。
 - `read_text_file`：读取 `workspace/` 目录中的 UTF-8 文本文件。
 - `write_text_file`：向 `workspace/` 写入 UTF-8 文本，默认不覆盖已有文件，除非 `overwrite=true`。
+- `transform_text`：按指令转换或整理文本，由执行器拦截调用 LLM 完成（只读）。
+- `search_web`：通过 Tavily 联网搜索，返回标题、链接和内容摘要。仅供深度调研计划使用（`read_only`），普通任务看不到它。
+- `write_cited_report`：把收集到的搜索结果合成为带引用的中文 Markdown 报告并保存到 `workspace/reports/`（`write`），由执行器拦截调用 LLM 合成。
+
+## 深度调研
+
+当请求包含「调研 / 研究报告 / 深度研究 / deep research」等关键词时，Router 会进入深度调研模式：
+
+1. 研究版 Planner 把主题拆成若干子问题，每个子问题配 1~2 个搜索词（总搜索数受 `PLANNER_MAX_STEPS` 限制）。
+2. 每个搜索词是一个 `search_web` 步骤（Tavily basic 搜索，1 credit/次）。
+3. 执行前一次性向用户确认子主题数和报告文件位置，确认后才开始联网搜索。
+4. 最后 `write_cited_report` 步骤由执行器拦截：把所有搜索结果交给模型，合成一份带 `[来源](url)` 引用的中文 Markdown 报告，保存到 `workspace/reports/`。
+5. 单个搜索失败会自动重新生成计划，已完成步骤会保留。
+
+普通任务和普通对话看不到 `search_web` / `write_cited_report`，不会擅自发起联网请求。需要配置 `TAVILY_API_KEY` 才能使用。
 
 ## 三层记忆架构
 
@@ -245,6 +263,7 @@ Planner 前有一层 `RequestRouter`，输出结构化 JSON：
 - `direct_answer`：普通聊天或可直接回答的任务
 - `single_tool`：明显只需要一次工具调用的任务
 - `planned_task`：包含多个依赖步骤的复杂任务
+- `deep_research`：需要联网调研的主题，生成调研计划并产出一份带引用的报告
 - `clarification`：缺少执行所必需的信息，必须先问用户
 
 普通聊天不会进入 Planner。信息不足时不会猜文件名、目标或保存位置。
@@ -375,6 +394,24 @@ pytest
 ```
 
 LLM 相关测试使用 mock，不依赖真实本地模型。
+
+## 评测（GAIA）
+
+在 [GAIA](https://huggingface.co/datasets/gaia-benchmark/GAIA) 通用 AI 助手基准上测量 agent 的能力。GAIA 的 466 道题需要联网搜索、多步推理和工具调用，官方判分使用规则化归一化器（数字 / 列表 / 字符串精确匹配），不需要 LLM judge，评测可复现。
+
+```bash
+python -m evals.run_eval --limit 30 --levels 1,2
+```
+
+数据从 ModelScope 镜像拉取（无需 HuggingFace token），结果写入 `evals/results/run_<时间戳>/`：
+
+- `report.md`：通过率（按 Level）、路由分布、搜索触发率、成本、引用真实性
+- `questions.jsonl`：逐题记录路由、步骤、搜索词、提取答案与期望答案
+- `selected_task_ids.json`：本次抽样题目清单（固定种子，可复现）
+
+评测依赖 LLM 路由：`RequestRouter` 接入 `llm_client` 后，规则先处理确定性场景（缺参数、显式调研关键词），其余请求由模型分类，事实性问题会自动判为 `deep_research` 并联网搜索。这会为每条自然语言消息增加一次 LLM 分类调用。
+
+本地小模型的绝对分数会偏低，评测的价值在于可复现基线、失败模式分析和驱动改进，而非数字本身。
 
 ## 当前限制
 

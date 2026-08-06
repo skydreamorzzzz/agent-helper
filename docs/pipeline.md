@@ -114,6 +114,8 @@ src/tools/
 - `calculator.py`：安全数学计算。
 - `file_tools.py`：读取和写入 `workspace/` 内的 UTF-8 文件。
 - `transform_text.py`：只读文本转换工具，由执行器调用 LLM 完成文本整理。
+- `search_web.py`：Tavily 联网搜索，只返回标题/链接/摘要（`read_only`），仅供深度调研计划使用。
+- `cited_report.py`：`write_cited_report` 的 stub 工具，由执行器拦截调用 LLM 合成带引用的报告并写入 `workspace/reports/`。
 
 职责：
 
@@ -177,7 +179,10 @@ src/planner/router.py
   - `direct_answer`
   - `single_tool`
   - `planned_task`
+  - `deep_research`
   - `clarification`
+- 包含「调研 / 研究报告 / 深度研究 / deep research」等复合关键词时路由到 `deep_research`。
+- 配置了 `llm_client` 时：规则先处理确定性场景（缺参数、显式调研关键词），其余请求由 LLM 分类，事实性问题（when / how many / who，需时效或外部信息）自动判为 `deep_research`；LLM 输出解析失败时回退规则。
 - 普通聊天不进入 Planner。
 - 多步骤依赖任务进入 Planner。
 - 缺少关键参数时要求澄清。
@@ -218,11 +223,13 @@ src/agent/runtime.py
 ```text
 src/planner/planner.py
 src/planner/prompts.py
+src/planner/research.py
 ```
 
 职责：
 
 - 为复杂任务生成结构化 Plan。
+- 深度调研时，`research.py` 让模型把主题拆成子问题，再物化成 `search_web` 步骤 + 一个 `write_cited_report` 步骤的标准 Plan，步骤总数受 `PLANNER_MAX_STEPS` 限制。
 - Planner 会看到真实工具列表、描述、风险等级和参数 schema。
 - 计划中只能使用 ToolRegistry 中真实存在的工具。
 - 当文本处理后还要写文件时，应生成 `read_text_file -> transform_text -> write_text_file` 这种可执行链路。
@@ -273,6 +280,7 @@ src/planner/executor.py
 - 调用工具并保存 `actual_output` 或 `error`。
 - 对 placeholder 参数调用模型解析。
 - 对 `transform_text` 调用模型执行文本转换。
+- 对 `write_cited_report` 收集已完成的 `search_web` 结果，调用模型合成带引用的报告并写入 `workspace/reports/`。
 - 对写入、破坏性和外部风险工具触发确认。
 - 失败后按配置重试或触发重新规划。
 

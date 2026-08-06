@@ -6,10 +6,20 @@ from src.tools.registry import ToolRegistry
 def build_router_prompt(user_input: str, memory_context: str = "") -> str:
     return (
         "Classify the user request for a local assistant.\n"
-        "Return JSON only: {\"route\":\"direct_answer|single_tool|planned_task|clarification\","
+        "Return JSON only: {\"route\":\"direct_answer|single_tool|planned_task|deep_research|clarification\","
         "\"reason\":\"...\",\"missing_information\":[]}\n"
-        "Rules: ordinary chat is direct_answer; exactly one obvious tool action is single_tool; "
-        "multiple dependent steps is planned_task; missing required parameters is clarification.\n"
+        "Rules:\n"
+        "- Greeting, casual chat, or a question answerable from general knowledge: direct_answer.\n"
+        "- A single obvious tool action (calculate, read/write a file): single_tool.\n"
+        "- Multiple dependent steps: planned_task.\n"
+        "- A FACTUAL question needing current, precise, or external information (e.g. 'when did X happen', "
+        "'how many', 'who is', statistics, news, numbers): deep_research. Do NOT answer from memory.\n"
+        "- An explicit request to research or investigate a topic: deep_research.\n"
+        "- Missing required parameters: clarification.\n"
+        "Examples:\n"
+        "- '你好' -> direct_answer\n"
+        "- '23.5 * 17' -> single_tool\n"
+        "- 'The total number of countries in 2025' -> deep_research\n"
         f"Memory context:\n{memory_context}\n"
         f"User request:\n{user_input}"
     )
@@ -71,4 +81,46 @@ def build_final_answer_prompt(goal: str, observations: dict[str, object], requir
         f"Goal: {goal}\n"
         f"Final output requirement: {requirement}\n"
         f"Observations: {observations}"
+    )
+
+
+def build_research_plan_prompt(
+    *,
+    user_input: str,
+    registry: ToolRegistry,
+    memory_context: str,
+    max_steps: int,
+) -> str:
+    max_subtopics = max(2, (max_steps - 1) // 2)
+    return (
+        "You are planning an in-depth web research task for a local assistant.\n"
+        "Break the research topic into focused sub-topics and return JSON only:\n"
+        "{"
+        "\"topic\":\"...\","
+        "\"sub_topics\":[{\"question\":\"...\",\"search_queries\":[\"...\"]}],"
+        "\"report_file\":\"reports/xxx.md\","
+        "\"assumptions\":[]"
+        "}\n"
+        f"Maximum total search queries: {max_steps - 1}. Use no more than {max_subtopics} sub-topics.\n"
+        "Each sub-topic should have 1-2 concrete search queries in the same language as the user request.\n"
+        "report_file must be a path under reports/ ending in .md.\n"
+        "Do not include unresolved_questions.\n\n"
+        f"Available tools:\n{registry.describe_tools()}\n\n"
+        f"Relevant memory context:\n{memory_context}\n\n"
+        f"User request:\n{user_input}"
+    )
+
+
+def build_cited_report_prompt(*, topic: str, sub_topics: list[str], materials: str, report_file: str) -> str:
+    return (
+        "You are writing a deep-research report in Chinese Markdown based only on the provided search materials.\n"
+        f"Topic: {topic}\n"
+        f"Sub-topics: {sub_topics}\n"
+        f"Target file: {report_file}\n\n"
+        "Requirements:\n"
+        "- Write in Chinese, well-structured Markdown with a title, a short intro, one section per sub-topic, and a conclusion.\n"
+        "- Cite sources inline as [来源](url). Only cite URLs that appear in the provided materials. Never fabricate sources or facts.\n"
+        "- End with a numbered \"参考来源\" list of the URLs actually cited.\n"
+        "- Output raw Markdown only. Do not wrap it in JSON or code fences.\n\n"
+        f"Search materials:\n{materials}"
     )

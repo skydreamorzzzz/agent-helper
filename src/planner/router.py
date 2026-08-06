@@ -21,6 +21,15 @@ class RequestRouter:
 
     def route(self, user_input: str, *, memory_context: str = "") -> RouteDecision:
         if self.llm_client is not None:
+            text = user_input.strip().lower()
+            if self._missing_information(text):
+                return RouteDecision(
+                    route=Route.CLARIFICATION,
+                    reason="缺少执行所必需的文件名、目标或写入位置。",
+                    missing_information=["请提供缺失的关键参数，例如文件名、输入内容或保存位置。"],
+                )
+            if self._looks_research(text):
+                return RouteDecision(route=Route.DEEP_RESEARCH, reason="请求要求联网深度调研。")
             decision = self._route_with_llm(user_input, memory_context=memory_context)
             if decision is not None:
                 return decision
@@ -46,16 +55,23 @@ class RequestRouter:
                 reason="缺少执行所必需的文件名、目标或写入位置。",
                 missing_information=["请提供缺失的关键参数，例如文件名、输入内容或保存位置。"],
             )
+        if self._looks_research(text):
+            return RouteDecision(route=Route.DEEP_RESEARCH, reason="请求要求联网深度调研。")
         if self._looks_planned(text):
             return RouteDecision(route=Route.PLANNED_TASK, reason="请求包含多个依赖步骤。")
         if self._looks_single_tool(text):
             return RouteDecision(route=Route.SINGLE_TOOL, reason="请求明显只需要一次工具调用。")
         return RouteDecision(route=Route.DIRECT_ANSWER, reason="普通对话或可直接回答。")
 
+    def _looks_research(self, text: str) -> bool:
+        markers = ("调研", "深度研究", "研究报告", "调查报告", "deep research", "research", "deep dive")
+        return any(marker in text for marker in markers)
+
     def _looks_single_tool(self, text: str) -> bool:
-        calculator = bool(re.search(r"\d+\s*[\+\-\*/]\s*\d+|计算|calculate", text))
-        read = ("读取" in text or "read" in text) and ("保存" not in text and "写入" not in text)
-        write = ("写入" in text or "保存" in text or "write" in text) and not ("读取" in text or "read" in text)
+        has_file_path = bool(re.search(r"[\w\-]+\.(txt|md)", text))
+        calculator = bool(re.search(r"计算|calculate|\*|/", text))
+        read = ("读取" in text or "read" in text) and has_file_path and ("保存" not in text and "写入" not in text)
+        write = ("写入" in text or "保存" in text or "write" in text) and has_file_path and not ("读取" in text or "read" in text)
         return calculator or read or write
 
     def _looks_planned(self, text: str) -> bool:
