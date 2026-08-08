@@ -38,18 +38,18 @@ class ConstraintRouter:
                 final=True,
                 source="constraint",
             )
-        if self._requires_current_information(text):
-            return RouteCandidate(
-                RouteDecision(route=Route.WEB_LOOKUP, reason="启发式路由：请求依赖最新或当前外部信息，但未要求系统调研。"),
-                confidence=0.72,
-                final=False,
-                source="constraint",
-            )
         if self._looks_research(text):
             return RouteCandidate(
                 RouteDecision(route=Route.DEEP_RESEARCH, reason="约束路由：请求明确要求联网调研或研究报告。"),
                 confidence=0.95,
                 final=True,
+                source="constraint",
+            )
+        if self._requires_current_information(text):
+            return RouteCandidate(
+                RouteDecision(route=Route.WEB_LOOKUP, reason="启发式路由：请求依赖最新或当前外部信息，但未要求系统调研。"),
+                confidence=0.72,
+                final=False,
                 source="constraint",
             )
         if self._looks_planned(text):

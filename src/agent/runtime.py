@@ -47,10 +47,22 @@ class AgentRuntime:
         self.summary_trigger_messages = summary_trigger_messages
         self.messages: list[dict[str, str]] = []
 
-    def run(self, user_input: str) -> AgentResult:
+    def run(
+        self,
+        user_input: str,
+        *,
+        required_tool: str | None = None,
+        execution_policy: str = "",
+    ) -> AgentResult:
         run_id = uuid.uuid4().hex
         logger = setup_run_logger(run_id, LOGS_DIR)
-        log_event(logger, "run_started", run_id=run_id, user_input=user_input)
+        log_event(
+            logger,
+            "run_started",
+            run_id=run_id,
+            user_input=user_input,
+            required_tool=required_tool,
+        )
 
         memory_context = None
         recent_messages = self.messages
@@ -80,6 +92,7 @@ class AgentRuntime:
                     self.tool_registry,
                     memory_context=memory_context.block if memory_context else "No memory service configured.",
                     conversation_summary=conversation_summary,
+                    execution_policy=execution_policy,
                 ),
             },
             *recent_messages,
@@ -94,6 +107,8 @@ class AgentRuntime:
         ]
 
         tool_calls = 0
+        required_tool_satisfied = required_tool is None
+        required_tool_reminders = 0
         while tool_calls <= self.max_tool_calls:
             try:
                 raw_output = self.llm_client.chat(messages)
@@ -118,6 +133,31 @@ class AgentRuntime:
                 raw_output = parsed.model_dump_json()
 
             if isinstance(parsed, FinalAnswer):
+                if not required_tool_satisfied:
+                    if required_tool_reminders >= 1:
+                        content = f"必须先成功调用 {required_tool} 才能回答，但模型仍直接返回最终答案，已安全停止。"
+                        log_event(logger, "required_tool_missing", required_tool=required_tool)
+                        self._append_turn(user_input, content)
+                        return AgentResult(run_id, content, "required_tool_missing")
+                    required_tool_reminders += 1
+                    log_event(
+                        logger,
+                        "final_answer_rejected",
+                        required_tool=required_tool,
+                        content=parsed.content,
+                    )
+                    messages.append({"role": "assistant", "content": raw_output})
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"This run requires a successful {required_tool} tool call before final_answer. "
+                                f"Call {required_tool} now with arguments based on the current user request. "
+                                "Return only the next agent JSON object."
+                            ),
+                        }
+                    )
+                    continue
                 log_event(logger, "final_answer", content=parsed.content)
                 self._append_turn(user_input, parsed.content)
                 return AgentResult(run_id, parsed.content, "final_answer")
@@ -138,6 +178,11 @@ class AgentRuntime:
                     index=tool_calls,
                 )
                 tool_result = self._execute_tool(parsed, logger)
+                if parsed.tool == required_tool:
+                    try:
+                        required_tool_satisfied = bool(json.loads(tool_result).get("ok"))
+                    except json.JSONDecodeError:
+                        required_tool_satisfied = False
                 messages.append({"role": "assistant", "content": raw_output})
                 messages.append(
                     {

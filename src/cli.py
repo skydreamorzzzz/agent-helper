@@ -131,7 +131,14 @@ def main() -> None:
             if not settings.tavily_api_key:
                 print("Assistant: 未配置 TAVILY_API_KEY，无法执行联网查询。请在 .env 中设置 TAVILY_API_KEY 后重启。")
                 continue
-            result = lookup_runtime.run(user_input)
+            result = lookup_runtime.run(
+                user_input,
+                required_tool="search_web",
+                execution_policy=(
+                    "This request was routed as web_lookup.\n"
+                    "You must call search_web before returning a final answer."
+                ),
+            )
             print(f"Assistant: {result.content}")
             print(f"[run_id: {result.run_id}]")
             continue

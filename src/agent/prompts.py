@@ -8,6 +8,7 @@ def build_system_prompt(
     *,
     memory_context: str = "No relevant long-term memories retrieved.",
     conversation_summary: str = "",
+    execution_policy: str = "",
 ) -> str:
     return (
         "System Instructions\n"
@@ -30,6 +31,9 @@ def build_system_prompt(
         "Conversation Summary\n"
         "====================\n"
         f"{conversation_summary or 'No conversation summary yet.'}\n\n"
+        "Execution Policy\n"
+        "================\n"
+        f"{execution_policy or 'No additional execution policy.'}\n\n"
         "Available Tools\n"
         "===============\n"
         f"{registry.describe_tools()}"

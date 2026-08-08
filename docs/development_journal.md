@@ -162,3 +162,57 @@ research_registry  lookup + write_cited_report
 ### 价值
 
 这次问题说明 Router 不只是分类器，还承担能力授权边界。好的路由设计需要区分硬约束和软启发式，也要区分“查一下即可回答”和“需要系统研究产出”。面试时可以说明：先用失败用例证明 `deep_research` 粒度过粗，再通过新增中间路由、收紧 ConstraintRouter、分层 ToolRegistry，把成本、权限和任务复杂度对齐。
+
+## Web Lookup 的执行闭环问题
+
+- 来源：修复 `web_lookup` 端到端行为测试
+- 相关模块：`RequestRouter`、`AgentRuntime`、`lookup_registry`、`search_web`
+- 结论类型：路由结果到执行策略的闭环
+
+### 问题
+
+新增 `web_lookup` 后，CLI 会把请求交给带有 `search_web` 的 `lookup_runtime`。但这只解决了“模型有没有搜索能力”的问题，没有保证“模型一定会使用搜索能力”。
+
+如果模型在第一轮直接返回：
+
+```json
+{"type":"final_answer","content":"..."}
+```
+
+Runtime 之前会直接接受最终答案。对于需要最新信息的问题，这等于绕过了 `web_lookup` 的语义，可能产生过时或未经验证的回答。
+
+同时还发现 ConstraintRouter 的判断顺序有隐患：显式“调研最新价格并比较套餐”会先命中 current-information 软启发式，导致本应进入 `deep_research` 的请求被降级为 `web_lookup`。
+
+### 解决
+
+先调整 ConstraintRouter 优先级：
+
+```text
+缺参 hard constraint
+-> 显式 research / 调研 / 研究报告 hard intent
+-> latest/current/价格/版本 soft web_lookup signal
+```
+
+再给 `AgentRuntime.run()` 增加轻量执行策略：
+
+```text
+required_tool="search_web"
+```
+
+当 `web_lookup` 运行时：
+
+1. system context 明确告诉模型本次请求被路由为 `web_lookup`，必须先调用 `search_web`。
+2. Runtime 在代码层跟踪 `search_web` 是否成功执行。
+3. 如果模型在搜索前直接返回 `final_answer`，Runtime 拒收一次，并要求模型先调用 `search_web`。
+4. 只有 `search_web` 返回 `ok=true` 后，Runtime 才接受 `final_answer`。
+5. 普通 core Runtime 不传 `required_tool`，仍允许首轮直接回答。
+
+### 价值
+
+这次问题说明 Agent 的能力控制不能停在“路由选择”和“工具可见性”两层。完整闭环应该是：
+
+```text
+route -> capability -> execution policy
+```
+
+`web_lookup` 不只是让模型“看见 search_web”，还要让执行层验证 search_web 确实发生。面试时可以把它解释为从 prompt-only 约束升级为 code-enforced policy：prompt 负责指导模型，Runtime 负责兜底执行语义。

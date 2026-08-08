@@ -98,6 +98,12 @@ def test_memory_methods_comparison_routes_to_deep_research() -> None:
     assert decision.route == Route.DEEP_RESEARCH
 
 
+def test_research_intent_wins_over_current_information_soft_signal() -> None:
+    decision = RequestRouter().route("帮我调研最新 Tavily API 价格并比较不同套餐")
+
+    assert decision.route == Route.DEEP_RESEARCH
+
+
 def test_semantic_router_can_route_similar_planned_task() -> None:
     candidate = SemanticRouter(threshold=0.2).route("multi step transform then write file")
 
