@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.planner.models import Route
-from src.planner.router import RequestRouter
+from src.planner.router import RequestRouter, SemanticRouter
 
 
 class StubLLM:
@@ -44,3 +44,36 @@ def test_single_tool_not_fooled_by_bare_read_in_english() -> None:
     decision = RequestRouter().route("Please read the situation and tell me.")
 
     assert decision.route != Route.SINGLE_TOOL
+
+
+def test_constraint_single_tool_wins_over_bad_llm_route() -> None:
+    llm = StubLLM('{"route":"deep_research","reason":"bad call","missing_information":[]}')
+
+    decision = RequestRouter(llm).route("计算 23 * 7")
+
+    assert decision.route == Route.SINGLE_TOOL
+
+
+def test_bare_url_is_not_calculator_single_tool() -> None:
+    decision = RequestRouter().route("请解释 https://example.com/path 这个链接大概是什么")
+
+    assert decision.route != Route.SINGLE_TOOL
+
+
+def test_english_research_word_alone_does_not_force_deep_research() -> None:
+    decision = RequestRouter().route("I am writing a research methods section for my paper.")
+
+    assert decision.route != Route.DEEP_RESEARCH
+
+
+def test_current_information_constraint_routes_to_deep_research_without_llm() -> None:
+    decision = RequestRouter().route("What is the latest Tavily API pricing?")
+
+    assert decision.route == Route.DEEP_RESEARCH
+
+
+def test_semantic_router_can_route_similar_planned_task() -> None:
+    candidate = SemanticRouter(threshold=0.2).route("multi step transform then write file")
+
+    assert candidate is not None
+    assert candidate.decision.route == Route.PLANNED_TASK

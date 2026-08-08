@@ -80,3 +80,37 @@ GAIA runner 需要从 Runtime 日志里提取工具调用轨迹，例如使用�
 ### 价值
 
 Benchmark 不只是能跑出通过率，还必须保证观测数据可信。评测代码本身也需要测试，否则会出现“模型结果是真的，但评测指标部分失真”的情况。
+
+## Router 从单层判断演进为分层多信号决策
+
+- 来源：检查 GAIA 评测后发现 Router 行为不稳定
+- 相关模块：`src/planner/router.py`、`tests/test_router_llm.py`
+- 结论类型：路由架构演进
+
+### 问题
+
+原 Router 把几类不同性质的判断混在一起：关键词规则、缺参判断、单工具判断和 LLM 判断。测试暴露出四个具体问题：
+
+1. LLM 可以把“计算 23 * 7”这种强确定性单工具任务误判成 `deep_research`。
+2. URL 中的 `/` 会被旧的计算规则误判为数学表达式，导致普通链接解释进入 `single_tool`。
+3. 英文 `research` 关键词过宽，“research methods section” 这种普通写作请求会被误判为联网调研。
+4. “latest Tavily API pricing” 这类明显需要最新外部信息的请求，在没有 LLM 时反而会走 `direct_answer`。
+
+这些问题说明 Router 不能只是“规则或 LLM 二选一”，也不能让 LLM 覆盖硬约束。
+
+### 解决
+
+把 `RequestRouter` 改成分层多信号系统：
+
+```text
+ConstraintRouter -> SemanticRouter -> LLMRouter -> Rule fallback
+```
+
+- `ConstraintRouter` 负责不可违反的硬约束和强确定性场景，例如缺参、明确联网调研、最新信息、本地多步骤文件任务、明显单工具任务。
+- `SemanticRouter` 负责轻量相似度匹配典型任务形态，作为未来 embedding router 的替换点。
+- `LLMRouter` 只在约束层没有最终结论时理解复杂语义。
+- 兜底规则负责处理 LLM 输出非法或信号不足。
+
+### 价值
+
+这次改动把“路由”从一个 if/else 函数提升成了可解释的决策系统。面试时可以说明：我们先用测试暴露误路由，再把路由拆成硬约束、语义相似和 LLM 理解三个层次，避免单一信号导致错误，同时为未来 embedding router 留出扩展点。

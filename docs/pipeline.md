@@ -181,8 +181,12 @@ src/planner/router.py
   - `planned_task`
   - `deep_research`
   - `clarification`
-- 包含「调研 / 研究报告 / 深度研究 / deep research」等复合关键词时路由到 `deep_research`。
-- 配置了 `llm_client` 时：规则先处理确定性场景（缺参数、显式调研关键词），其余请求由 LLM 分类，事实性问题（when / how many / who，需时效或外部信息）自动判为 `deep_research`；LLM 输出解析失败时回退规则。
+- Router 是分层多信号系统：
+  - `ConstraintRouter`：处理硬约束和强确定性场景，例如缺参数、明确联网调研、最新价格/新闻/版本信息、本地多步骤文件任务、明显单工具任务。
+  - `SemanticRouter`：用轻量相似度匹配典型任务形态，作为未来 embedding router 的可替换占位层。
+  - `LLMRouter`：在约束层没有最终结论时，理解复杂意图、上下文和组合任务。
+  - 规则兜底：LLM 输出非法或信号不足时，回到保守规则。
+- 强确定性任务不会被 LLM 覆盖，例如“计算 23 * 7”不会因为 LLM 误判而进入 `deep_research`。
 - 普通聊天不进入 Planner。
 - 多步骤依赖任务进入 Planner。
 - 缺少关键参数时要求澄清。
@@ -359,4 +363,3 @@ src/memory/journal.py
 4. Planner 只生成计划，Validator 负责硬约束，Executor 负责状态推进。
 5. 工具职责保持单一，文本整理通过 `transform_text` 建模，不混入文件写入工具。
 6. 写入和高风险操作需要确认，避免模型单方面决定修改文件。
-
