@@ -14,6 +14,7 @@ def write_predictions(records: list[dict[str, Any]], out_dir: Path) -> None:
 
 def write_report(metrics: dict[str, Any], records: list[dict[str, Any]], out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    metadata = metrics.get("metadata") or {}
     lines = [
         "# Router Benchmark Report",
         "",
@@ -21,6 +22,11 @@ def write_report(metrics: dict[str, Any], records: list[dict[str, Any]], out_dir
         f"Mode: `{metrics['mode']}`",
         f"Split: `{metrics['split']}`",
         f"Sample count: {metrics['total']}",
+        f"Git commit: `{metadata.get('git_commit') or ''}`",
+        f"Embedding model: `{metadata.get('embedding_model') or ''}`",
+        f"LLM model: `{metadata.get('llm_model') or ''}`",
+        f"Similarity threshold: `{metadata.get('similarity_threshold')}`",
+        f"Margin threshold: `{metadata.get('margin_threshold')}`",
         f"Overall Accuracy: {metrics['accuracy']:.3f}",
         f"Macro F1: {metrics['macro_f1']:.3f}",
         f"LLM call count: {metrics['llm_call_count']}",

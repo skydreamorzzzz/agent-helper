@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -13,15 +15,25 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from src.config import load_settings
 from src.llm.client import LocalLLMClient
+from src.planner.embedding_router import EmbeddingRouter, HashingEmbedder
 from src.planner.models import Route, RouteDecision
-from src.planner.router import ConstraintRouter, RequestRouter
+from src.planner.router import ConstraintRouter, LLMRouter, RequestRouter
 
 from evals.router.report import write_predictions, write_report
 
 DATASET_PATH = Path(__file__).with_name("dataset.jsonl")
 RESULTS_ROOT = Path(__file__).with_name("results")
 DATASET_VERSION = "router-v1"
-BenchmarkMode = Literal["constraint_only", "lexical_baseline", "current_hybrid"]
+DEFAULT_EMBEDDING_MODEL = os.getenv("ROUTER_EMBEDDING_MODEL", "hashing-multilingual-v1")
+DEFAULT_SIMILARITY_THRESHOLD = float(os.getenv("ROUTER_EMBEDDING_SIMILARITY_THRESHOLD", "0.32"))
+DEFAULT_MARGIN_THRESHOLD = float(os.getenv("ROUTER_EMBEDDING_MARGIN_THRESHOLD", "0.04"))
+BenchmarkMode = Literal[
+    "constraint_only",
+    "lexical_baseline",
+    "embedding_only",
+    "current_hybrid",
+    "embedding_hybrid",
+]
 BenchmarkSplit = Literal["dev", "test", "all"]
 
 
@@ -135,6 +147,7 @@ def compute_metrics(
     mode: str,
     split: str = "all",
     llm_call_count: int = 0,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     labels = sorted({str(route.value) for route in Route} | {str(record["predicted_route"]) for record in records})
     total = len(records)
@@ -204,10 +217,24 @@ def compute_metrics(
         "llm_escalation_rate": (
             sum(1 for record in records if record.get("llm_escalated")) / total if total else 0.0
         ),
+        "metadata": metadata or {},
     }
 
 
-def build_route_fn(mode: BenchmarkMode) -> tuple[RouteFn, Callable[[], int]]:
+def build_route_fn(
+    mode: BenchmarkMode,
+    *,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    margin_threshold: float = DEFAULT_MARGIN_THRESHOLD,
+) -> tuple[RouteFn, Callable[[], int], dict[str, Any]]:
+    base_metadata = {
+        "git_commit": _git_commit(),
+        "embedding_model": "",
+        "llm_model": "",
+        "similarity_threshold": None,
+        "margin_threshold": None,
+    }
     if mode == "constraint_only":
         constraint = ConstraintRouter()
 
@@ -217,11 +244,35 @@ def build_route_fn(mode: BenchmarkMode) -> tuple[RouteFn, Callable[[], int]]:
                 return candidate.decision
             return RouteDecision(route=Route.DIRECT_ANSWER, reason="constraint fallback: direct_answer")
 
-        return route_with_constraints, lambda: 0
+        return route_with_constraints, lambda: 0, base_metadata
 
     if mode == "lexical_baseline":
         router = RequestRouter()
-        return lambda user_input: router.route(user_input), lambda: 0
+        return lambda user_input: router.route(user_input), lambda: 0, base_metadata
+
+    if mode == "embedding_only":
+        constraint = ConstraintRouter()
+        embedding_router = EmbeddingRouter(
+            embedder=HashingEmbedder(model_name=embedding_model),
+            similarity_threshold=similarity_threshold,
+            margin_threshold=margin_threshold,
+        )
+        metadata = {
+            **base_metadata,
+            "embedding_model": embedding_router.model_name,
+            "similarity_threshold": similarity_threshold,
+            "margin_threshold": margin_threshold,
+        }
+
+        def route_with_embedding(user_input: str) -> RouteDecision:
+            return _route_embedding_cascade(
+                user_input,
+                constraint_router=constraint,
+                embedding_router=embedding_router,
+                llm_router=None,
+            )
+
+        return route_with_embedding, lambda: 0, metadata
 
     settings = load_settings()
     counting = CountingLLM(
@@ -232,20 +283,96 @@ def build_route_fn(mode: BenchmarkMode) -> tuple[RouteFn, Callable[[], int]]:
             timeout=settings.local_llm_timeout,
         )
     )
-    router = RequestRouter(counting)
-    return lambda user_input: router.route(user_input), lambda: counting.count
+    if mode == "current_hybrid":
+        router = RequestRouter(counting)
+        return lambda user_input: router.route(user_input), lambda: counting.count, {
+            **base_metadata,
+            "llm_model": settings.local_llm_model,
+        }
+
+    constraint = ConstraintRouter()
+    embedding_router = EmbeddingRouter(
+        embedder=HashingEmbedder(model_name=embedding_model),
+        similarity_threshold=similarity_threshold,
+        margin_threshold=margin_threshold,
+    )
+    llm_router = LLMRouter(counting)
+    metadata = {
+        **base_metadata,
+        "embedding_model": embedding_router.model_name,
+        "llm_model": settings.local_llm_model,
+        "similarity_threshold": similarity_threshold,
+        "margin_threshold": margin_threshold,
+    }
+
+    def route_with_embedding_hybrid(user_input: str) -> RouteDecision:
+        return _route_embedding_cascade(
+            user_input,
+            constraint_router=constraint,
+            embedding_router=embedding_router,
+            llm_router=llm_router,
+        )
+
+    return route_with_embedding_hybrid, lambda: counting.count, metadata
+
+
+def _route_embedding_cascade(
+    user_input: str,
+    *,
+    constraint_router: ConstraintRouter,
+    embedding_router: EmbeddingRouter,
+    llm_router: LLMRouter | None,
+) -> RouteDecision:
+    constraint = constraint_router.route(user_input)
+    if constraint and constraint.final:
+        return constraint.decision
+
+    embedding = embedding_router.route(user_input)
+    if embedding is not None:
+        return embedding.decision
+
+    if llm_router is not None:
+        llm_decision = llm_router._route_with_llm(user_input, memory_context="")
+        if llm_decision is not None:
+            if (
+                constraint is not None
+                and constraint.decision.route == Route.WEB_LOOKUP
+                and llm_decision.route == Route.DIRECT_ANSWER
+            ):
+                return constraint.decision
+            return llm_decision
+
+    if constraint is not None:
+        return constraint.decision
+    return RouteDecision(route=Route.DIRECT_ANSWER, reason="embedding cascade fallback: direct_answer")
+
+
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+    except Exception:
+        return ""
 
 
 def run_benchmark(
     *,
     mode: BenchmarkMode,
     split: BenchmarkSplit = "test",
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    margin_threshold: float = DEFAULT_MARGIN_THRESHOLD,
     dataset_path: Path = DATASET_PATH,
     out_root: Path = RESULTS_ROOT,
 ) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
     examples = filter_examples_by_split(load_dataset(dataset_path), split)
-    route_fn, counter = build_route_fn(mode)
+    route_fn, counter, metadata = build_route_fn(
+        mode,
+        embedding_model=embedding_model,
+        similarity_threshold=similarity_threshold,
+        margin_threshold=margin_threshold,
+    )
     records, metrics = evaluate_examples(examples, route_fn, mode=mode, split=split, llm_call_count=counter)
+    metrics["metadata"] = metadata
 
     out_dir = out_root / time.strftime("run_%Y%m%d_%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -259,9 +386,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run router evaluation benchmark.")
     parser.add_argument(
         "--mode",
-        choices=["constraint_only", "lexical_baseline", "current_hybrid"],
+        choices=["constraint_only", "lexical_baseline", "embedding_only", "current_hybrid", "embedding_hybrid"],
         default="lexical_baseline",
     )
+    parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
+    parser.add_argument("--similarity-threshold", type=float, default=DEFAULT_SIMILARITY_THRESHOLD)
+    parser.add_argument("--margin-threshold", type=float, default=DEFAULT_MARGIN_THRESHOLD)
     parser.add_argument("--split", choices=["dev", "test", "all"], default="test")
     parser.add_argument("--dataset", default=str(DATASET_PATH), help="path to router dataset jsonl")
     parser.add_argument("--out", default=str(RESULTS_ROOT), help="output root directory")
@@ -270,6 +400,9 @@ def main() -> None:
     out_dir, records, metrics = run_benchmark(
         mode=args.mode,
         split=args.split,
+        embedding_model=args.embedding_model,
+        similarity_threshold=args.similarity_threshold,
+        margin_threshold=args.margin_threshold,
         dataset_path=Path(args.dataset),
         out_root=Path(args.out),
     )

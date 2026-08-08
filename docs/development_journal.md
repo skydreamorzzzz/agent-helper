@@ -425,3 +425,107 @@ llm_escalation_rate     llm_escalated_examples / total
 ### 价值
 
 现在 Router benchmark v1 具备固定数据、dev/test split、ablation mode 和可提交 baseline。下一阶段引入 EmbeddingRouter 时，可以先在 dev 上调试，再用 test 做阶段验收，并且能分别比较 constraint、lexical、LLM 和未来 embedding/cascade 的真实贡献。
+
+## EmbeddingRouter v1：低成本语义层的第一轮验证
+
+- 来源：实现并评估第一版 `EmbeddingRouter`
+- 相关模块：`src/planner/embedding_router.py`、`evals/router/runner.py`、`evals/router/baselines/embedding_v1.md`
+- 结论类型：路由实验
+
+### 问题
+
+Router benchmark v1 的 baseline 显示：
+
+```text
+constraint_only:
+accuracy 0.667
+macro-F1 0.621
+
+lexical_baseline:
+accuracy 0.667
+macro-F1 0.621
+
+current_hybrid:
+accuracy 0.833
+macro-F1 0.812
+LLM escalation rate 0.556
+```
+
+这说明当前 Jaccard `SemanticRouter` 在独立 test split 上没有带来可测增益；而 LLM Router 虽然显著提高准确率，但超过一半样本需要升级到 LLM。
+
+因此引入 embedding 不是为了堆技术，而是尝试建立一个成本更低的中间语义层：
+
+```text
+Rule -> Embedding -> LLM
+```
+
+目标是在保持准确率的同时，降低 LLM Router 的调用比例。
+
+### 解决
+
+新增独立 `EmbeddingRouter`，没有直接大改 `RequestRouter`：
+
+```text
+user query
+-> embedder.encode()
+-> 与每个 route 的 prototype embedding 比较
+-> 计算 best similarity / second similarity / margin
+-> 分数和 margin 达标才返回 route
+-> 不确定时交给后续 LLM 或 fallback
+```
+
+第一版使用本地、无额外依赖的 `HashingEmbedder` 作为可复现 baseline，并通过 `Embedder` 协议把 embedding provider 与 Router 解耦。prototype embedding 在初始化时缓存，避免每次请求重复编码。
+
+评测新增两个 mode：
+
+```text
+embedding_only   ConstraintRouter -> EmbeddingRouter -> direct_answer fallback
+embedding_hybrid ConstraintRouter -> EmbeddingRouter -> uncertain 时 LLMRouter
+```
+
+阈值只根据 dev split 选择：
+
+```text
+similarity_threshold = 0.32
+margin_threshold     = 0.04
+```
+
+### 结果
+
+test split 上：
+
+```text
+lexical_baseline:
+accuracy 0.667
+macro-F1 0.621
+LLM escalation rate 0.000
+
+embedding_only:
+accuracy 0.833
+macro-F1 0.813
+LLM escalation rate 0.000
+
+current_hybrid:
+accuracy 0.833
+macro-F1 0.812
+LLM escalation rate 0.556
+
+embedding_hybrid:
+accuracy 0.778
+macro-F1 0.758
+LLM escalation rate 0.333
+```
+
+`embedding_only` 明显优于 Jaccard lexical baseline，并且在 test 上达到与 `current_hybrid` 接近的准确率，同时不调用 LLM。
+
+但 `embedding_hybrid` 虽然把 LLM escalation rate 从 `0.556` 降到 `0.333`，准确率也从 `0.833` 降到 `0.778`。主要原因是 embedding 一旦做出高置信错误判断，当前 cascade 不会再交给 LLM 修正。
+
+### 价值
+
+这轮实验给出了三个面试时值得讲清楚的工程结论：
+
+1. Jaccard 语义层可以被 benchmark 证明收益不足，而不是凭感觉说“不够智能”。
+2. embedding 作为中间层确实能修复一批 lexical failure，例如最新股价、multi-source pricing comparison、缺参请求。
+3. cascade 不是简单把 Rule / Embedding / LLM 串起来就结束；还要设计硬约束边界、置信度阈值和 LLM override policy，否则会用更低成本换来不可接受的错路由。
+
+下一阶段更值得做的是调整 hard constraint / cascade policy，并在同一 `Embedder` 协议下接入真正的多语言 sentence embedding provider，而不是直接重构 Planner 或引入向量数据库。

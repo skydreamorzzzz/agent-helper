@@ -11,8 +11,10 @@ from evals.router.runner import (
     evaluate_examples,
     filter_examples_by_split,
     load_dataset,
+    _route_embedding_cascade,
 )
 from src.planner.models import Route, RouteDecision
+from src.planner.router import RouteCandidate
 
 
 def test_router_dataset_loads_with_required_route_coverage_and_splits() -> None:
@@ -104,6 +106,31 @@ def test_router_metrics_accuracy_confusion_and_macro_f1() -> None:
     assert metrics["llm_escalation_rate"] == pytest.approx(2 / 3)
 
 
+def test_llm_escalation_rate_counts_examples_not_total_calls() -> None:
+    records = [
+        {
+            "expected_route": "direct_answer",
+            "predicted_route": "direct_answer",
+            "correct": True,
+            "category": "stable",
+            "llm_escalated": True,
+        },
+        {
+            "expected_route": "web_lookup",
+            "predicted_route": "web_lookup",
+            "correct": True,
+            "category": "current",
+            "llm_escalated": False,
+        },
+    ]
+
+    metrics = compute_metrics(records, mode="unit", split="test", llm_call_count=3)
+
+    assert metrics["llm_call_count"] == 3
+    assert metrics["llm_escalated_examples"] == 1
+    assert metrics["llm_escalation_rate"] == pytest.approx(0.5)
+
+
 def test_router_eval_runs_fake_router_and_counts_llm_calls() -> None:
     examples = [
         RouterExample(
@@ -150,14 +177,81 @@ def test_constraint_only_mode_does_not_instantiate_request_router(monkeypatch) -
 
     monkeypatch.setattr(runner, "RequestRouter", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("called")))
 
-    route_fn, counter = build_route_fn("constraint_only")
+    route_fn, counter, metadata = build_route_fn("constraint_only")
 
     assert route_fn("hello").route == Route.DIRECT_ANSWER
     assert counter() == 0
+    assert metadata["embedding_model"] == ""
 
 
 def test_lexical_baseline_does_not_call_llm() -> None:
-    route_fn, counter = build_route_fn("lexical_baseline")
+    route_fn, counter, metadata = build_route_fn("lexical_baseline")
 
     assert route_fn("What is the latest Tavily API pricing?").route == Route.WEB_LOOKUP
     assert counter() == 0
+    assert metadata["llm_model"] == ""
+
+
+def test_embedding_only_does_not_call_llm() -> None:
+    route_fn, counter, metadata = build_route_fn(
+        "embedding_only",
+        similarity_threshold=0.0,
+        margin_threshold=0.0,
+    )
+
+    route_fn("Summarize and save it somewhere")
+
+    assert counter() == 0
+    assert metadata["embedding_model"]
+
+
+class AlwaysUncertainEmbeddingRouter:
+    def route(self, user_input: str):
+        return None
+
+
+class KnownEmbeddingRouter:
+    def route(self, user_input: str):
+        if "known" not in user_input:
+            return None
+        return RouteCandidate(
+            RouteDecision(route=Route.CLARIFICATION, reason="known embedding"),
+            confidence=1.0,
+            source="embedding",
+        )
+
+
+class FakeLLMRouter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def _route_with_llm(self, user_input: str, *, memory_context: str) -> RouteDecision:
+        self.calls += 1
+        return RouteDecision(route=Route.DIRECT_ANSWER, reason="llm fallback")
+
+
+class EmptyConstraintRouter:
+    def route(self, user_input: str):
+        return None
+
+
+def test_embedding_hybrid_calls_llm_only_when_embedding_is_uncertain() -> None:
+    llm = FakeLLMRouter()
+    constraint = EmptyConstraintRouter()
+
+    known = _route_embedding_cascade(
+        "known request",
+        constraint_router=constraint,
+        embedding_router=KnownEmbeddingRouter(),
+        llm_router=llm,
+    )
+    unknown = _route_embedding_cascade(
+        "unknown request",
+        constraint_router=constraint,
+        embedding_router=AlwaysUncertainEmbeddingRouter(),
+        llm_router=llm,
+    )
+
+    assert known.route == Route.CLARIFICATION
+    assert unknown.route == Route.DIRECT_ANSWER
+    assert llm.calls == 1
