@@ -3,14 +3,17 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from src.agent.prompts import build_repair_prompt, build_system_prompt
 from src.agent.protocol import FinalAnswer, ModelOutputParseError, ToolCall, parse_model_output
 from src.config import LOGS_DIR
 from src.logging_utils import log_event, setup_run_logger
 from src.memory.service import MemoryService
+from src.planner.models import RiskLevel
+from src.tools.policy import PolicyAction, ToolExecutionPolicy
 from src.tools.registry import ToolArgumentError, ToolRegistry, UnknownToolError
 
 
@@ -26,6 +29,9 @@ class AgentResult:
     stopped_reason: str
 
 
+RuntimeConfirmationCallback = Callable[[str, dict[str, Any], RiskLevel, str], bool]
+
+
 class AgentRuntime:
     def __init__(
         self,
@@ -37,6 +43,9 @@ class AgentRuntime:
         working_memory_max_messages: int = 12,
         working_memory_max_chars: int = 12000,
         summary_trigger_messages: int = 16,
+        confirm_write_actions: bool = True,
+        confirmation_callback: RuntimeConfirmationCallback | None = None,
+        tool_policy: ToolExecutionPolicy | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_registry = tool_registry
@@ -45,6 +54,9 @@ class AgentRuntime:
         self.working_memory_max_messages = working_memory_max_messages
         self.working_memory_max_chars = working_memory_max_chars
         self.summary_trigger_messages = summary_trigger_messages
+        self.confirm_write_actions = confirm_write_actions
+        self.confirmation_callback = confirmation_callback
+        self.tool_policy = tool_policy or ToolExecutionPolicy()
         self.messages: list[dict[str, str]] = []
 
     def run(
@@ -177,7 +189,11 @@ class AgentRuntime:
                     arguments=parsed.arguments,
                     index=tool_calls,
                 )
-                tool_result = self._execute_tool(parsed, logger)
+                tool_result, stopped_reason = self._execute_tool(parsed, logger)
+                if stopped_reason is not None:
+                    content = json.loads(tool_result).get("error", "工具执行被策略阻止，已安全停止。")
+                    self._append_turn(user_input, content)
+                    return AgentResult(run_id, content, stopped_reason)
                 if parsed.tool == required_tool:
                     try:
                         required_tool_satisfied = bool(json.loads(tool_result).get("ok"))
@@ -224,15 +240,54 @@ class AgentRuntime:
             log_event(logger, "model_repair_failed", raw=repaired_raw, error=str(exc))
             return None
 
-    def _execute_tool(self, tool_call: ToolCall, logger: logging.Logger) -> str:
+    def _execute_tool(self, tool_call: ToolCall, logger: logging.Logger) -> tuple[str, str | None]:
         try:
+            tool = self.tool_registry.get(tool_call.tool)
+            decision = self.tool_policy.evaluate(
+                tool=tool,
+                arguments=tool_call.arguments,
+                confirm_write_actions=self.confirm_write_actions,
+            )
+            log_event(
+                logger,
+                "tool_policy_decision",
+                tool=tool_call.tool,
+                risk_level=decision.risk_level,
+                decision=decision.action,
+                reason=decision.reason,
+            )
+            if decision.action == PolicyAction.DENY:
+                result = {"ok": False, "error": f"Tool execution denied: {decision.reason}"}
+                log_event(logger, "tool_result", tool=tool_call.tool, result=result)
+                return json.dumps(result, ensure_ascii=False), "tool_policy_denied"
+            if decision.action == PolicyAction.CONFIRM:
+                approved = False
+                if self.confirmation_callback is not None:
+                    approved = self.confirmation_callback(
+                        tool_call.tool,
+                        tool_call.arguments,
+                        decision.risk_level,
+                        decision.reason,
+                    )
+                log_event(
+                    logger,
+                    "tool_confirmation",
+                    tool=tool_call.tool,
+                    risk_level=decision.risk_level,
+                    approved=approved,
+                    reason=decision.reason,
+                )
+                if not approved:
+                    result = {"ok": False, "error": f"Tool execution requires confirmation: {decision.reason}"}
+                    log_event(logger, "tool_result", tool=tool_call.tool, result=result)
+                    return json.dumps(result, ensure_ascii=False), "tool_confirmation_rejected"
             result = self.tool_registry.execute(tool_call.tool, tool_call.arguments)
         except (UnknownToolError, ToolArgumentError) as exc:
             result = {"ok": False, "error": str(exc)}
         except Exception as exc:
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         log_event(logger, "tool_result", tool=tool_call.tool, result=result)
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False), None
 
     def _append_turn(self, user_input: str, assistant_output: str) -> None:
         if self.memory_service is not None:

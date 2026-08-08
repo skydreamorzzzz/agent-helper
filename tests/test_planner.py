@@ -183,6 +183,27 @@ def test_destructive_operation_requires_confirmation(tmp_path: Path) -> None:
     assert result.plan.status == PlanStatus.PAUSED
 
 
+def test_write_tool_uses_shared_policy_and_requires_confirmation(tmp_path: Path) -> None:
+    registry = make_registry(WriteTextFileTool())
+    plan = Plan(
+        goal="write",
+        steps=[
+            PlanStep(
+                id="s1",
+                description="write",
+                tool_name="write_text_file",
+                arguments={"path": "policy-test.txt", "content": "x"},
+            )
+        ],
+    )
+
+    result = PlanExecutor(registry=registry, repository=make_repo(tmp_path)).execute(plan)
+
+    assert result.stopped_reason == "confirmation_required"
+    assert result.plan.status == PlanStatus.PAUSED
+    assert "write action requires confirmation" in result.final_answer
+
+
 def test_completed_steps_preserved_on_replan(tmp_path: Path) -> None:
     calls: list[str] = []
     registry = make_registry(EchoTool(calls), FailingTool())
@@ -226,4 +247,3 @@ def test_plan_persists_to_sqlite(tmp_path: Path) -> None:
 
     assert loaded is not None
     assert loaded.goal == "persist"
-

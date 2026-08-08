@@ -74,6 +74,8 @@ def main() -> None:
         working_memory_max_messages=settings.working_memory_max_messages,
         working_memory_max_chars=settings.working_memory_max_chars,
         summary_trigger_messages=settings.summary_trigger_messages,
+        confirm_write_actions=settings.confirm_write_actions,
+        confirmation_callback=confirm_runtime_tool_action,
     )
     lookup_runtime = AgentRuntime(
         llm_client=llm_client,
@@ -83,6 +85,8 @@ def main() -> None:
         working_memory_max_messages=settings.working_memory_max_messages,
         working_memory_max_chars=settings.working_memory_max_chars,
         summary_trigger_messages=settings.summary_trigger_messages,
+        confirm_write_actions=settings.confirm_write_actions,
+        confirmation_callback=confirm_runtime_tool_action,
     )
 
     def research_replan(plan: Plan, reason: str) -> Plan:
@@ -376,6 +380,14 @@ def confirm_tool_action(plan, step, risk: RiskLevel, reason: str) -> bool:
     print(f"Confirm {risk} action for plan {plan.plan_id}, step {step.id}: {reason}")
     print(f"Tool: {step.tool_name}")
     print(f"Arguments: {json.dumps(step.arguments, ensure_ascii=False)}")
+    answer = input("Proceed? [y/N]: ").strip().lower()
+    return answer in {"y", "yes"}
+
+
+def confirm_runtime_tool_action(tool_name: str, arguments: dict, risk: RiskLevel, reason: str) -> bool:
+    print(f"Confirm {risk} action: {reason}")
+    print(f"Tool: {tool_name}")
+    print(f"Arguments: {json.dumps(arguments, ensure_ascii=False)}")
     answer = input("Proceed? [y/N]: ").strip().lower()
     return answer in {"y", "yes"}
 

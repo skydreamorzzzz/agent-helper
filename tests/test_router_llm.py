@@ -20,6 +20,24 @@ def test_llm_routes_factual_question_to_deep_research() -> None:
     assert decision.route == Route.DEEP_RESEARCH
 
 
+def test_router_representative_boundaries_without_llm() -> None:
+    cases = [
+        ("你好", Route.DIRECT_ANSWER),
+        ("解释一下 Transformer 残差连接", Route.DIRECT_ANSWER),
+        ("计算 23 * 7", Route.SINGLE_TOOL),
+        ("What is the latest Tavily API pricing?", Route.WEB_LOOKUP),
+        ("Who is the current CEO of OpenAI?", Route.WEB_LOOKUP),
+        ("帮我调研主流 Agent Memory 方法并比较优缺点", Route.DEEP_RESEARCH),
+        ("帮我调研最新 Tavily API 价格并比较不同套餐", Route.DEEP_RESEARCH),
+        ("读取 a.txt，总结后保存到 b.txt", Route.PLANNED_TASK),
+    ]
+
+    router = RequestRouter()
+
+    for user_input, expected_route in cases:
+        assert router.route(user_input).route == expected_route
+
+
 def test_llm_parse_failure_falls_back_to_rules() -> None:
     decision = RequestRouter(StubLLM("not json at all")).route("计算 23 * 7")
 

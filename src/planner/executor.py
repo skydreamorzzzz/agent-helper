@@ -9,7 +9,6 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from src.agent.protocol import FinalAnswer, extract_first_json_object, parse_model_output
-from src.config import WORKSPACE_DIR
 from src.logging_utils import log_event
 from src.planner.models import ExecutionResult, Plan, PlanStatus, PlanStep, ReplanRecord, RiskLevel, StepStatus
 from src.planner.prompts import (
@@ -20,6 +19,7 @@ from src.planner.prompts import (
 from src.planner.repository import PlanRepository
 from src.planner.validator import PlanValidator
 from src.tools.file_tools import resolve_workspace_path
+from src.tools.policy import PolicyAction, ToolExecutionPolicy
 from src.tools.registry import ToolRegistry
 
 
@@ -46,6 +46,7 @@ class PlanExecutor:
         confirmation_callback: ConfirmationCallback | None = None,
         replan_callback: ReplanCallback | None = None,
         logger: logging.Logger | None = None,
+        tool_policy: ToolExecutionPolicy | None = None,
     ) -> None:
         self.registry = registry
         self.repository = repository
@@ -57,6 +58,7 @@ class PlanExecutor:
         self.confirmation_callback = confirmation_callback
         self.replan_callback = replan_callback
         self.logger = logger
+        self.tool_policy = tool_policy or ToolExecutionPolicy()
 
     def execute(self, plan: Plan) -> ExecutionResult:
         validation = self.validator.validate(plan)
@@ -86,19 +88,47 @@ class PlanExecutor:
             self.repository.save(plan)
             self._log("plan_step_started", plan_id=plan.plan_id, step_id=step.id, tool=step.tool_name, arguments=step.arguments)
 
-            tool = self.registry.get(step.tool_name)
-            risk = RiskLevel(tool.risk_level)
-            reason = self._confirmation_reason(step, risk)
-            if reason and not self._confirm(plan, step, risk, reason):
-                step.status = StepStatus.PENDING
-                plan.status = PlanStatus.PAUSED
-                self.repository.save(plan)
-                self._log("plan_confirmation_required", plan_id=plan.plan_id, step_id=step.id, reason=reason)
-                return ExecutionResult(plan=plan, final_answer=f"步骤 {step.id} 需要确认：{reason}", stopped_reason="confirmation_required")
-
             try:
+                tool = self.registry.get(step.tool_name)
                 resolved_arguments = self._resolve_arguments_if_needed(plan, step)
                 tool.argument_schema.model_validate(resolved_arguments)
+                decision = self.tool_policy.evaluate(
+                    tool=tool,
+                    arguments=resolved_arguments,
+                    confirm_write_actions=self.confirm_write_actions,
+                )
+                self._log(
+                    "tool_policy_decision",
+                    plan_id=plan.plan_id,
+                    step_id=step.id,
+                    tool=step.tool_name,
+                    risk_level=decision.risk_level,
+                    decision=decision.action,
+                    reason=decision.reason,
+                )
+                if decision.action == PolicyAction.DENY:
+                    raise RuntimeError(f"Tool execution denied: {decision.reason}")
+                if decision.action == PolicyAction.CONFIRM:
+                    approved = self._confirm(plan, step, decision.risk_level, decision.reason)
+                    self._log(
+                        "tool_confirmation",
+                        plan_id=plan.plan_id,
+                        step_id=step.id,
+                        tool=step.tool_name,
+                        risk_level=decision.risk_level,
+                        approved=approved,
+                        reason=decision.reason,
+                    )
+                    if not approved:
+                        step.status = StepStatus.PENDING
+                        plan.status = PlanStatus.PAUSED
+                        self.repository.save(plan)
+                        self._log("plan_confirmation_required", plan_id=plan.plan_id, step_id=step.id, reason=decision.reason)
+                        return ExecutionResult(
+                            plan=plan,
+                            final_answer=f"步骤 {step.id} 需要确认：{decision.reason}",
+                            stopped_reason="confirmation_required",
+                        )
                 result = self._execute_tool(plan, step.tool_name, resolved_arguments)
                 step.arguments = resolved_arguments
                 if result.get("ok"):
@@ -174,22 +204,6 @@ class PlanExecutor:
         if isinstance(value, list):
             return any(self._contains_placeholder(item) for item in value)
         return False
-
-    def _confirmation_reason(self, step: PlanStep, risk: RiskLevel) -> str | None:
-        if risk in (RiskLevel.DESTRUCTIVE, RiskLevel.EXTERNAL):
-            return f"tool risk level is {risk}"
-        if risk == RiskLevel.WRITE and self.confirm_write_actions:
-            return "write action requires confirmation"
-        if step.tool_name == "write_text_file":
-            path = step.arguments.get("path")
-            overwrite = bool(step.arguments.get("overwrite", False))
-            if path and overwrite and (WORKSPACE_DIR / str(path)).exists():
-                return "overwriting an existing file requires confirmation"
-        if step.tool_name == "write_cited_report":
-            path = step.arguments.get("report_file")
-            if path and (WORKSPACE_DIR / str(path)).exists():
-                return "overwriting an existing report requires confirmation"
-        return None
 
     def _execute_tool(self, plan: Plan, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if tool_name == "transform_text":

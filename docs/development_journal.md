@@ -216,3 +216,55 @@ route -> capability -> execution policy
 ```
 
 `web_lookup` 不只是让模型“看见 search_web”，还要让执行层验证 search_web 确实发生。面试时可以把它解释为从 prompt-only 约束升级为 code-enforced policy：prompt 负责指导模型，Runtime 负责兜底执行语义。
+
+## risk_level 只作为元数据导致 Runtime 可绕过写确认
+
+- 来源：工具执行安全策略专项检查
+- 相关模块：`AgentRuntime`、`PlanExecutor`、`ToolRegistry`、`ToolExecutionPolicy`
+- 结论类型：安全策略统一
+
+### 问题
+
+工具已经声明了 `risk_level`，但它最初主要是 prompt 元数据。`PlanExecutor` 有自己的确认逻辑，会在写入、破坏性或外部风险工具前暂停确认；普通 `AgentRuntime` 却直接调用 `ToolRegistry.execute()`。
+
+这意味着同一个 `write_text_file`：
+
+```text
+Planner 路径 -> 需要确认
+Runtime 路径 -> 可能直接执行
+```
+
+安全策略被分散在不同执行路径里，导致行为不一致。只要模型在普通 JSON tool_call 协议里选择写文件，就可能绕过 Planner 的确认机制。
+
+### 解决
+
+新增统一的 `ToolExecutionPolicy`：
+
+```text
+ToolExecutionPolicy.evaluate(tool, risk_level, arguments, confirm_write_actions)
+  -> allow / confirm / deny
+```
+
+第一版规则保持保守：
+
+- `read_only` 自动允许。
+- `write` 在 `CONFIRM_WRITE_ACTIONS=true` 时要求确认，关闭配置时允许。
+- `destructive` 始终要求确认。
+- `external` 保持原策略，要求确认。
+- `write_text_file + overwrite=true` 无论全局写确认是否关闭，都要求确认。
+
+然后让两条路径复用同一个策略：
+
+```text
+AgentRuntime
+        ↘
+      ToolExecutionPolicy
+        ↗
+PlanExecutor
+```
+
+Runtime 如果需要确认但没有 callback，或者用户拒绝，会安全停止，不执行工具。PlanExecutor 保留原状态机，只把确认原因来源切换为统一 policy。
+
+### 价值
+
+这次问题说明安全边界不能只靠工具声明，也不能只在某一条执行路径里实现。工具元数据只有被执行层统一解释，才会成为真正的权限策略。面试时可以强调：发现 Runtime 和 Planner 对同一风险工具行为不一致后，把风险判断抽成共享 policy，避免未来新增执行入口时再次绕过确认。
