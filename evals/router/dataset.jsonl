@@ -1,60 +1,60 @@
-{"id":"route_001","input":"你好","expected_route":"direct_answer","category":"casual_chat","language":"zh","note":"simple greeting"}
-{"id":"route_002","input":"Hello, how are you?","expected_route":"direct_answer","category":"casual_chat","language":"en","note":"english greeting"}
-{"id":"route_003","input":"解释一下 Transformer 残差连接","expected_route":"direct_answer","category":"stable_knowledge","language":"zh","note":"stable ML concept"}
-{"id":"route_004","input":"What is a Python context manager?","expected_route":"direct_answer","category":"stable_knowledge","language":"en","note":"stable programming concept"}
-{"id":"route_005","input":"软件版本号通常怎么设计？","expected_route":"direct_answer","category":"stable_knowledge","language":"zh","note":"version keyword should not imply latest lookup"}
-{"id":"route_006","input":"Explain why URLs contain slashes like https://example.com/a/b","expected_route":"direct_answer","category":"url_noise","language":"en","note":"url slash should not trigger calculator"}
-{"id":"route_007","input":"I am writing a research methods section. Give me structure suggestions.","expected_route":"direct_answer","category":"weak_research_keyword","language":"en","note":"research word alone is not web research"}
-{"id":"route_008","input":"最近心情有点乱，和我聊聊","expected_route":"direct_answer","category":"casual_chat","language":"zh","note":"recent as casual temporal wording"}
-{"id":"route_009","input":"What happened in 2023-01-01?","expected_route":"direct_answer","category":"date_noise","language":"en","note":"date-like string should not trigger calculator"}
-{"id":"route_010","input":"帮我解释一下这段需求的含义，不要执行任何工具","expected_route":"direct_answer","category":"direct_instruction","language":"zh","note":"explicit no tools"}
-{"id":"route_011","input":"计算 23 * 7","expected_route":"single_tool","category":"calculator","language":"zh","note":"simple arithmetic"}
-{"id":"route_012","input":"Calculate 23.5 * 17","expected_route":"single_tool","category":"calculator","language":"en","note":"english arithmetic"}
-{"id":"route_013","input":"100 / 4 + 6 等于多少？","expected_route":"single_tool","category":"calculator","language":"zh","note":"math expression"}
-{"id":"route_014","input":"读取 a.txt","expected_route":"single_tool","category":"file_read","language":"zh","note":"single file read"}
-{"id":"route_015","input":"Read notes.md","expected_route":"single_tool","category":"file_read","language":"en","note":"single file read"}
-{"id":"route_016","input":"把 hello 写入 result.txt","expected_route":"single_tool","category":"file_write","language":"zh","note":"single file write"}
-{"id":"route_017","input":"Write the text hello to output.md","expected_route":"single_tool","category":"file_write","language":"en","note":"single file write"}
-{"id":"route_018","input":"请读取 config.md 的内容","expected_route":"single_tool","category":"file_read","language":"zh","note":"read one workspace file"}
-{"id":"route_019","input":"计算 1 - 2","expected_route":"single_tool","category":"calculator","language":"zh","note":"minus expression with spaces"}
-{"id":"route_020","input":"把 42 保存到 answer.txt","expected_route":"single_tool","category":"file_write","language":"zh","note":"save one value to file"}
-{"id":"route_021","input":"What is the latest Tavily API pricing?","expected_route":"web_lookup","category":"current_fact","language":"en","note":"simple external lookup"}
-{"id":"route_022","input":"Who is the current CEO of OpenAI?","expected_route":"web_lookup","category":"current_fact","language":"en","note":"current office holder"}
-{"id":"route_023","input":"现在 Anthropic 的 CEO 是谁？","expected_route":"web_lookup","category":"current_fact","language":"zh","note":"current office holder zh"}
-{"id":"route_024","input":"最新 Python 稳定版本是多少？","expected_route":"web_lookup","category":"current_version","language":"zh","note":"latest version lookup"}
-{"id":"route_025","input":"What is the current price of Bitcoin?","expected_route":"web_lookup","category":"current_price","language":"en","note":"current price"}
-{"id":"route_026","input":"最近 OpenAI API 有什么价格变化？","expected_route":"web_lookup","category":"current_fact","language":"zh","note":"simple pricing news lookup"}
-{"id":"route_027","input":"What is the latest release version of FastAPI?","expected_route":"web_lookup","category":"current_version","language":"en","note":"latest release"}
-{"id":"route_028","input":"当前 NVIDIA 股价是多少？","expected_route":"web_lookup","category":"current_price","language":"zh","note":"current stock price"}
-{"id":"route_029","input":"What is the latest status of Tavily API?","expected_route":"web_lookup","category":"current_status","language":"en","note":"current service status"}
-{"id":"route_030","input":"现在美国总统是谁？","expected_route":"web_lookup","category":"current_fact","language":"zh","note":"current political office"}
-{"id":"route_031","input":"读取 a.txt，总结后保存到 b.txt","expected_route":"planned_task","category":"file_transform_write","language":"zh","note":"read transform write"}
-{"id":"route_032","input":"Read a.txt, summarize it, then save to b.txt","expected_route":"planned_task","category":"file_transform_write","language":"en","note":"read summarize write"}
-{"id":"route_033","input":"读取 todo.txt，找出三项任务，并保存到 today_plan.md","expected_route":"planned_task","category":"file_transform_write","language":"zh","note":"multi-step todo planning"}
-{"id":"route_034","input":"把 notes.md 中的要点整理成 bullet list 并写入 summary.md","expected_route":"planned_task","category":"file_transform_write","language":"zh","note":"transform then write"}
-{"id":"route_035","input":"Read log.txt and extract errors into errors.md","expected_route":"planned_task","category":"file_transform_write","language":"en","note":"extract then write"}
-{"id":"route_036","input":"计算 23 * 7，并把结果保存到 result.txt","expected_route":"planned_task","category":"calculator_then_write","language":"zh","note":"tool result feeds file write"}
-{"id":"route_037","input":"Calculate 12 * 9 and write the answer to answer.txt","expected_route":"planned_task","category":"calculator_then_write","language":"en","note":"calculate then write"}
-{"id":"route_038","input":"读取 report.md，整理摘要，再生成 brief.md","expected_route":"planned_task","category":"file_transform_write","language":"zh","note":"read summarize generate"}
-{"id":"route_039","input":"把 a.txt 和 b.txt 都读一下，合并摘要保存到 merged.md","expected_route":"planned_task","category":"multi_file","language":"zh","note":"multiple inputs and write"}
-{"id":"route_040","input":"Read draft.md, polish it, and save the revised version to final.md","expected_route":"planned_task","category":"file_transform_write","language":"en","note":"polish then save"}
-{"id":"route_041","input":"帮我调研主流 Agent Memory 方法并比较优缺点","expected_route":"deep_research","category":"research_compare","language":"zh","note":"systematic comparison"}
-{"id":"route_042","input":"帮我调研最新 Tavily API 价格并比较不同套餐","expected_route":"deep_research","category":"research_current_compare","language":"zh","note":"research hard intent wins over current soft signal"}
-{"id":"route_043","input":"Research the main agent memory architectures and compare pros and cons","expected_route":"deep_research","category":"research_compare","language":"en","note":"english systematic comparison"}
-{"id":"route_044","input":"写一份关于当前主流 AI Agent 框架的研究报告","expected_route":"deep_research","category":"research_report","language":"zh","note":"saved research report"}
-{"id":"route_045","input":"Deep dive into current RAG evaluation methods with sources","expected_route":"deep_research","category":"research_report","language":"en","note":"deep dive with sources"}
-{"id":"route_046","input":"调研 LangGraph、CrewAI 和 AutoGen 的区别，并给出建议","expected_route":"deep_research","category":"research_compare","language":"zh","note":"multiple tools comparison"}
-{"id":"route_047","input":"Investigate online how SQLite FTS5 compares with vector search for memory","expected_route":"deep_research","category":"research_compare","language":"en","note":"explicit online investigation"}
-{"id":"route_048","input":"帮我做一份 2026 年个人助手 Agent 技术趋势调研","expected_route":"deep_research","category":"research_trend","language":"zh","note":"trend research"}
-{"id":"route_049","input":"Compare the latest OpenAI, Anthropic, and Google model pricing and cite sources","expected_route":"deep_research","category":"research_current_compare","language":"en","note":"multi-source pricing comparison"}
-{"id":"route_050","input":"请调查报告一下本地 Agent 项目的竞品和差异化","expected_route":"deep_research","category":"research_report","language":"zh","note":"report intent"}
-{"id":"route_051","input":"帮我读取文件","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing file path"}
-{"id":"route_052","input":"保存一下","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing content and path"}
-{"id":"route_053","input":"写个文件","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing content and path"}
-{"id":"route_054","input":"帮我处理这个","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing target and task detail"}
-{"id":"route_055","input":"Read the file","expected_route":"clarification","category":"missing_params","language":"en","note":"missing file path"}
-{"id":"route_056","input":"Save the result","expected_route":"clarification","category":"missing_params","language":"en","note":"missing result and path"}
-{"id":"route_057","input":"请把结果保存到文件里","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing output path and content"}
-{"id":"route_058","input":"帮我把这个总结一下","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing source content"}
-{"id":"route_059","input":"Summarize and save it somewhere","expected_route":"clarification","category":"missing_params","language":"en","note":"missing source and destination"}
-{"id":"route_060","input":"分析一下","expected_route":"clarification","category":"missing_params","language":"zh","note":"OOD vague request"}
+{"id":"route_001","input":"你好","expected_route":"direct_answer","category":"casual_chat","language":"zh","note":"simple greeting","split":"dev"}
+{"id":"route_002","input":"Hello, how are you?","expected_route":"direct_answer","category":"casual_chat","language":"en","note":"english greeting","split":"dev"}
+{"id":"route_003","input":"解释一下 Transformer 残差连接","expected_route":"direct_answer","category":"stable_knowledge","language":"zh","note":"stable ML concept","split":"dev"}
+{"id":"route_004","input":"What is a Python context manager?","expected_route":"direct_answer","category":"stable_knowledge","language":"en","note":"stable programming concept","split":"dev"}
+{"id":"route_005","input":"软件版本号通常怎么设计？","expected_route":"direct_answer","category":"stable_knowledge","language":"zh","note":"version keyword should not imply latest lookup","split":"dev"}
+{"id":"route_006","input":"Explain why URLs contain slashes like https://example.com/a/b","expected_route":"direct_answer","category":"url_noise","language":"en","note":"url slash should not trigger calculator","split":"dev"}
+{"id":"route_007","input":"I am writing a research methods section. Give me structure suggestions.","expected_route":"direct_answer","category":"weak_research_keyword","language":"en","note":"research word alone is not web research","split":"dev"}
+{"id":"route_008","input":"最近心情有点乱，和我聊聊","expected_route":"direct_answer","category":"casual_chat","language":"zh","note":"recent as casual temporal wording","split":"test"}
+{"id":"route_009","input":"What happened in 2023-01-01?","expected_route":"direct_answer","category":"date_noise","language":"en","note":"date-like string should not trigger calculator","split":"test"}
+{"id":"route_010","input":"帮我解释一下这段需求的含义，不要执行任何工具","expected_route":"direct_answer","category":"direct_instruction","language":"zh","note":"explicit no tools","split":"test"}
+{"id":"route_011","input":"计算 23 * 7","expected_route":"single_tool","category":"calculator","language":"zh","note":"simple arithmetic","split":"dev"}
+{"id":"route_012","input":"Calculate 23.5 * 17","expected_route":"single_tool","category":"calculator","language":"en","note":"english arithmetic","split":"dev"}
+{"id":"route_013","input":"100 / 4 + 6 等于多少？","expected_route":"single_tool","category":"calculator","language":"zh","note":"math expression","split":"dev"}
+{"id":"route_014","input":"读取 a.txt","expected_route":"single_tool","category":"file_read","language":"zh","note":"single file read","split":"dev"}
+{"id":"route_015","input":"Read notes.md","expected_route":"single_tool","category":"file_read","language":"en","note":"single file read","split":"dev"}
+{"id":"route_016","input":"把 hello 写入 result.txt","expected_route":"single_tool","category":"file_write","language":"zh","note":"single file write","split":"dev"}
+{"id":"route_017","input":"Write the text hello to output.md","expected_route":"single_tool","category":"file_write","language":"en","note":"single file write","split":"dev"}
+{"id":"route_018","input":"请读取 config.md 的内容","expected_route":"single_tool","category":"file_read","language":"zh","note":"read one workspace file","split":"test"}
+{"id":"route_019","input":"计算 1 - 2","expected_route":"single_tool","category":"calculator","language":"zh","note":"minus expression with spaces","split":"test"}
+{"id":"route_020","input":"把 42 保存到 answer.txt","expected_route":"single_tool","category":"file_write","language":"zh","note":"save one value to file","split":"test"}
+{"id":"route_021","input":"What is the latest Tavily API pricing?","expected_route":"web_lookup","category":"current_fact","language":"en","note":"simple external lookup","split":"dev"}
+{"id":"route_022","input":"Who is the current CEO of OpenAI?","expected_route":"web_lookup","category":"current_fact","language":"en","note":"current office holder","split":"dev"}
+{"id":"route_023","input":"现在 Anthropic 的 CEO 是谁？","expected_route":"web_lookup","category":"current_fact","language":"zh","note":"current office holder zh","split":"dev"}
+{"id":"route_024","input":"最新 Python 稳定版本是多少？","expected_route":"web_lookup","category":"current_version","language":"zh","note":"latest version lookup","split":"dev"}
+{"id":"route_025","input":"What is the current price of Bitcoin?","expected_route":"web_lookup","category":"current_price","language":"en","note":"current price","split":"dev"}
+{"id":"route_026","input":"最近 OpenAI API 有什么价格变化？","expected_route":"web_lookup","category":"current_fact","language":"zh","note":"simple pricing news lookup","split":"dev"}
+{"id":"route_027","input":"What is the latest release version of FastAPI?","expected_route":"web_lookup","category":"current_version","language":"en","note":"latest release","split":"dev"}
+{"id":"route_028","input":"当前 NVIDIA 股价是多少？","expected_route":"web_lookup","category":"current_price","language":"zh","note":"current stock price","split":"test"}
+{"id":"route_029","input":"What is the latest status of Tavily API?","expected_route":"web_lookup","category":"current_status","language":"en","note":"current service status","split":"test"}
+{"id":"route_030","input":"现在美国总统是谁？","expected_route":"web_lookup","category":"current_fact","language":"zh","note":"current political office","split":"test"}
+{"id":"route_031","input":"读取 a.txt，总结后保存到 b.txt","expected_route":"planned_task","category":"file_transform_write","language":"zh","note":"read transform write","split":"dev"}
+{"id":"route_032","input":"Read a.txt, summarize it, then save to b.txt","expected_route":"planned_task","category":"file_transform_write","language":"en","note":"read summarize write","split":"dev"}
+{"id":"route_033","input":"读取 todo.txt，找出三项任务，并保存到 today_plan.md","expected_route":"planned_task","category":"file_transform_write","language":"zh","note":"multi-step todo planning","split":"dev"}
+{"id":"route_034","input":"把 notes.md 中的要点整理成 bullet list 并写入 summary.md","expected_route":"planned_task","category":"file_transform_write","language":"zh","note":"transform then write","split":"dev"}
+{"id":"route_035","input":"Read log.txt and extract errors into errors.md","expected_route":"planned_task","category":"file_transform_write","language":"en","note":"extract then write","split":"dev"}
+{"id":"route_036","input":"计算 23 * 7，并把结果保存到 result.txt","expected_route":"planned_task","category":"calculator_then_write","language":"zh","note":"tool result feeds file write","split":"dev"}
+{"id":"route_037","input":"Calculate 12 * 9 and write the answer to answer.txt","expected_route":"planned_task","category":"calculator_then_write","language":"en","note":"calculate then write","split":"dev"}
+{"id":"route_038","input":"读取 report.md，整理摘要，再生成 brief.md","expected_route":"planned_task","category":"file_transform_write","language":"zh","note":"read summarize generate","split":"test"}
+{"id":"route_039","input":"把 a.txt 和 b.txt 都读一下，合并摘要保存到 merged.md","expected_route":"planned_task","category":"multi_file","language":"zh","note":"multiple inputs and write","split":"test"}
+{"id":"route_040","input":"Read draft.md, polish it, and save the revised version to final.md","expected_route":"planned_task","category":"file_transform_write","language":"en","note":"polish then save","split":"test"}
+{"id":"route_041","input":"帮我调研主流 Agent Memory 方法并比较优缺点","expected_route":"deep_research","category":"research_compare","language":"zh","note":"systematic comparison","split":"dev"}
+{"id":"route_042","input":"帮我调研最新 Tavily API 价格并比较不同套餐","expected_route":"deep_research","category":"research_current_compare","language":"zh","note":"research hard intent wins over current soft signal","split":"dev"}
+{"id":"route_043","input":"Research the main agent memory architectures and compare pros and cons","expected_route":"deep_research","category":"research_compare","language":"en","note":"english systematic comparison","split":"dev"}
+{"id":"route_044","input":"写一份关于当前主流 AI Agent 框架的研究报告","expected_route":"deep_research","category":"research_report","language":"zh","note":"saved research report","split":"dev"}
+{"id":"route_045","input":"Deep dive into current RAG evaluation methods with sources","expected_route":"deep_research","category":"research_report","language":"en","note":"deep dive with sources","split":"dev"}
+{"id":"route_046","input":"调研 LangGraph、CrewAI 和 AutoGen 的区别，并给出建议","expected_route":"deep_research","category":"research_compare","language":"zh","note":"multiple tools comparison","split":"dev"}
+{"id":"route_047","input":"Investigate online how SQLite FTS5 compares with vector search for memory","expected_route":"deep_research","category":"research_compare","language":"en","note":"explicit online investigation","split":"dev"}
+{"id":"route_048","input":"帮我做一份 2026 年个人助手 Agent 技术趋势调研","expected_route":"deep_research","category":"research_trend","language":"zh","note":"trend research","split":"test"}
+{"id":"route_049","input":"Compare the latest OpenAI, Anthropic, and Google model pricing and cite sources","expected_route":"deep_research","category":"research_current_compare","language":"en","note":"multi-source pricing comparison","split":"test"}
+{"id":"route_050","input":"请调查报告一下本地 Agent 项目的竞品和差异化","expected_route":"deep_research","category":"research_report","language":"zh","note":"report intent","split":"test"}
+{"id":"route_051","input":"帮我读取文件","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing file path","split":"dev"}
+{"id":"route_052","input":"保存一下","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing content and path","split":"dev"}
+{"id":"route_053","input":"写个文件","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing content and path","split":"dev"}
+{"id":"route_054","input":"帮我处理这个","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing target and task detail","split":"dev"}
+{"id":"route_055","input":"Read the file","expected_route":"clarification","category":"missing_params","language":"en","note":"missing file path","split":"dev"}
+{"id":"route_056","input":"Save the result","expected_route":"clarification","category":"missing_params","language":"en","note":"missing result and path","split":"dev"}
+{"id":"route_057","input":"请把结果保存到文件里","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing output path and content","split":"dev"}
+{"id":"route_058","input":"帮我把这个总结一下","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing source content","split":"test"}
+{"id":"route_059","input":"Summarize and save it somewhere","expected_route":"clarification","category":"missing_params","language":"en","note":"missing source and destination","split":"test"}
+{"id":"route_060","input":"分析一下","expected_route":"clarification","category":"missing_params","language":"zh","note":"OOD vague request","split":"test"}

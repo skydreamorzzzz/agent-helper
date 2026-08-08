@@ -14,12 +14,15 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from src.config import load_settings
 from src.llm.client import LocalLLMClient
 from src.planner.models import Route, RouteDecision
-from src.planner.router import RequestRouter
+from src.planner.router import ConstraintRouter, RequestRouter
 
 from evals.router.report import write_predictions, write_report
 
 DATASET_PATH = Path(__file__).with_name("dataset.jsonl")
 RESULTS_ROOT = Path(__file__).with_name("results")
+DATASET_VERSION = "router-v1"
+BenchmarkMode = Literal["constraint_only", "lexical_baseline", "current_hybrid"]
+BenchmarkSplit = Literal["dev", "test", "all"]
 
 
 class RouterExample(BaseModel):
@@ -29,12 +32,20 @@ class RouterExample(BaseModel):
     category: str = Field(min_length=1)
     language: str = Field(min_length=1)
     note: str = ""
+    split: str
 
     @field_validator("language")
     @classmethod
     def validate_language(cls, value: str) -> str:
         if value not in {"en", "zh", "mixed", "ood"}:
             raise ValueError("language must be one of: en, zh, mixed, ood")
+        return value
+
+    @field_validator("split")
+    @classmethod
+    def validate_split(cls, value: str) -> str:
+        if value not in {"dev", "test"}:
+            raise ValueError("split must be one of: dev, test")
         return value
 
 
@@ -71,15 +82,23 @@ def load_dataset(path: Path = DATASET_PATH) -> list[RouterExample]:
     return examples
 
 
+def filter_examples_by_split(examples: list[RouterExample], split: BenchmarkSplit) -> list[RouterExample]:
+    if split == "all":
+        return examples
+    return [example for example in examples if example.split == split]
+
+
 def evaluate_examples(
     examples: list[RouterExample],
     route_fn: RouteFn,
     *,
     mode: str,
+    split: str = "all",
     llm_call_count: Callable[[], int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for example in examples:
+        calls_before = llm_call_count() if llm_call_count is not None else 0
         try:
             decision = route_fn(example.input)
             predicted = str(decision.route)
@@ -87,6 +106,8 @@ def evaluate_examples(
         except Exception as exc:
             predicted = "error"
             reason = f"{type(exc).__name__}: {exc}"
+        calls_after = llm_call_count() if llm_call_count is not None else calls_before
+        llm_calls = max(0, calls_after - calls_before)
         records.append(
             {
                 "id": example.id,
@@ -98,14 +119,23 @@ def evaluate_examples(
                 "category": example.category,
                 "language": example.language,
                 "note": example.note,
+                "split": example.split,
+                "llm_calls": llm_calls,
+                "llm_escalated": llm_calls > 0,
             }
         )
 
     llm_calls = llm_call_count() if llm_call_count is not None else 0
-    return records, compute_metrics(records, mode=mode, llm_call_count=llm_calls)
+    return records, compute_metrics(records, mode=mode, split=split, llm_call_count=llm_calls)
 
 
-def compute_metrics(records: list[dict[str, Any]], *, mode: str, llm_call_count: int = 0) -> dict[str, Any]:
+def compute_metrics(
+    records: list[dict[str, Any]],
+    *,
+    mode: str,
+    split: str = "all",
+    llm_call_count: int = 0,
+) -> dict[str, Any]:
     labels = sorted({str(route.value) for route in Route} | {str(record["predicted_route"]) for record in records})
     total = len(records)
     correct = sum(1 for record in records if record["correct"])
@@ -158,7 +188,9 @@ def compute_metrics(records: list[dict[str, Any]], *, mode: str, llm_call_count:
     }
 
     return {
+        "dataset_version": DATASET_VERSION,
         "mode": mode,
+        "split": split,
         "total": total,
         "correct": correct,
         "accuracy": accuracy,
@@ -168,12 +200,26 @@ def compute_metrics(records: list[dict[str, Any]], *, mode: str, llm_call_count:
         "confusion_matrix": confusion,
         "category_accuracy": category_accuracy,
         "llm_call_count": llm_call_count,
-        "llm_escalation_rate": llm_call_count / total if total else 0.0,
+        "llm_escalated_examples": sum(1 for record in records if record.get("llm_escalated")),
+        "llm_escalation_rate": (
+            sum(1 for record in records if record.get("llm_escalated")) / total if total else 0.0
+        ),
     }
 
 
-def build_route_fn(mode: Literal["rule_only", "full_router"]) -> tuple[RouteFn, Callable[[], int]]:
-    if mode == "rule_only":
+def build_route_fn(mode: BenchmarkMode) -> tuple[RouteFn, Callable[[], int]]:
+    if mode == "constraint_only":
+        constraint = ConstraintRouter()
+
+        def route_with_constraints(user_input: str) -> RouteDecision:
+            candidate = constraint.route(user_input)
+            if candidate is not None:
+                return candidate.decision
+            return RouteDecision(route=Route.DIRECT_ANSWER, reason="constraint fallback: direct_answer")
+
+        return route_with_constraints, lambda: 0
+
+    if mode == "lexical_baseline":
         router = RequestRouter()
         return lambda user_input: router.route(user_input), lambda: 0
 
@@ -192,13 +238,14 @@ def build_route_fn(mode: Literal["rule_only", "full_router"]) -> tuple[RouteFn, 
 
 def run_benchmark(
     *,
-    mode: Literal["rule_only", "full_router"],
+    mode: BenchmarkMode,
+    split: BenchmarkSplit = "test",
     dataset_path: Path = DATASET_PATH,
     out_root: Path = RESULTS_ROOT,
 ) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
-    examples = load_dataset(dataset_path)
+    examples = filter_examples_by_split(load_dataset(dataset_path), split)
     route_fn, counter = build_route_fn(mode)
-    records, metrics = evaluate_examples(examples, route_fn, mode=mode, llm_call_count=counter)
+    records, metrics = evaluate_examples(examples, route_fn, mode=mode, split=split, llm_call_count=counter)
 
     out_dir = out_root / time.strftime("run_%Y%m%d_%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -210,13 +257,19 @@ def run_benchmark(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run router evaluation benchmark.")
-    parser.add_argument("--mode", choices=["rule_only", "full_router"], default="rule_only")
+    parser.add_argument(
+        "--mode",
+        choices=["constraint_only", "lexical_baseline", "current_hybrid"],
+        default="lexical_baseline",
+    )
+    parser.add_argument("--split", choices=["dev", "test", "all"], default="test")
     parser.add_argument("--dataset", default=str(DATASET_PATH), help="path to router dataset jsonl")
     parser.add_argument("--out", default=str(RESULTS_ROOT), help="output root directory")
     args = parser.parse_args()
 
     out_dir, records, metrics = run_benchmark(
         mode=args.mode,
+        split=args.split,
         dataset_path=Path(args.dataset),
         out_root=Path(args.out),
     )
@@ -229,7 +282,11 @@ def main() -> None:
         print(f"  input={record['input']}")
     print(f"Total accuracy: {metrics['accuracy']:.3f}")
     print(f"Macro F1: {metrics['macro_f1']:.3f}")
-    print(f"LLM calls: {metrics['llm_call_count']} ({metrics['llm_escalation_rate']:.3f} per example)")
+    print(
+        f"LLM calls: {metrics['llm_call_count']} "
+        f"(escalated examples: {metrics['llm_escalated_examples']}, "
+        f"rate={metrics['llm_escalation_rate']:.3f})"
+    )
     print(f"Report: {out_dir / 'report.md'}")
 
 

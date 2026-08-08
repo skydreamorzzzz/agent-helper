@@ -375,3 +375,53 @@ Hybrid Cascade
 ```
 
 而不是凭感觉判断“好像更聪明了”。这也更适合在简历项目中解释工程成熟度：先建立评测基线，再做模型或算法升级。
+
+## Router Benchmark v1 固化与 Ablation Baseline
+
+- 来源：Router benchmark v1 收尾
+- 相关模块：`evals/router/dataset.jsonl`、`evals/router/runner.py`、`evals/router/baselines/v1.md`
+- 结论类型：评测基线固化
+
+### 问题
+
+第一版 Router dataset 和 runner 已经能暴露 failure mode，但还缺少两个工程约束：
+
+1. 没有固定 dev/test split，后续调规则或原型时容易在同一批样本上反复优化，无法区分“调参集”和“阶段验收集”。
+2. 原 `rule_only` 命名不准确，因为它实际包含 `ConstraintRouter + SemanticRouter(Jaccard) + fallback`，不是纯规则约束。
+
+此外，`llm_escalation_rate` 如果直接用 LLM 总调用次数除以样本数，未来一个样本多次调用 LLM 时会混淆“调用成本”和“升级样本比例”。
+
+### 解决
+
+把 60 条 dataset 固化为 `router-v1`，并在每条样本中写入稳定 split：
+
+```text
+dev  42 条，用于后续 threshold / prototype / cascade 调整
+test 18 条，用于阶段性验收
+```
+
+每个 split 都覆盖六种 route：
+
+```text
+direct_answer / single_tool / web_lookup / planned_task / deep_research / clarification
+```
+
+Runner mode 改成更明确的 ablation：
+
+```text
+constraint_only  = ConstraintRouter + direct_answer fallback
+lexical_baseline = RequestRouter without LLM，包含 Constraint + Jaccard Semantic + fallback
+current_hybrid   = 当前 RequestRouter + LLM
+```
+
+同时区分两个 LLM 指标：
+
+```text
+llm_call_count          LLM 总调用次数
+llm_escalated_examples  实际调用过 LLM 的样本数
+llm_escalation_rate     llm_escalated_examples / total
+```
+
+### 价值
+
+现在 Router benchmark v1 具备固定数据、dev/test split、ablation mode 和可提交 baseline。下一阶段引入 EmbeddingRouter 时，可以先在 dev 上调试，再用 test 做阶段验收，并且能分别比较 constraint、lexical、LLM 和未来 embedding/cascade 的真实贡献。
