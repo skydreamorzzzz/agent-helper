@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from src.config import load_settings
 from src.llm.client import LocalLLMClient
-from src.planner.embedding_router import EmbeddingRouter, HashingEmbedder
+from src.planner.embedding_router import EmbeddingRouter, Embedder, HashingEmbedder, SentenceTransformerEmbedder
 from src.planner.models import Route, RouteDecision
 from src.planner.router import ConstraintRouter, LLMRouter, RequestRouter
 
@@ -24,7 +24,15 @@ from evals.router.report import write_predictions, write_report
 DATASET_PATH = Path(__file__).with_name("dataset.jsonl")
 RESULTS_ROOT = Path(__file__).with_name("results")
 DATASET_VERSION = "router-v1"
-DEFAULT_EMBEDDING_MODEL = os.getenv("ROUTER_EMBEDDING_MODEL", "hashing-multilingual-v1")
+HASHING_MODEL = "hashing-multilingual-v1"
+DEFAULT_SENTENCE_TRANSFORMER_MODEL = "BAAI/bge-small-zh-v1.5"
+DEFAULT_EMBEDDING_PROVIDER = os.getenv("ROUTER_EMBEDDING_PROVIDER", "hashing")
+DEFAULT_EMBEDDING_MODEL = os.getenv("ROUTER_EMBEDDING_MODEL", "")
+DEFAULT_EMBEDDING_LOCAL_FILES_ONLY = os.getenv("ROUTER_EMBEDDING_LOCAL_FILES_ONLY", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 DEFAULT_SIMILARITY_THRESHOLD = float(os.getenv("ROUTER_EMBEDDING_SIMILARITY_THRESHOLD", "0.32"))
 DEFAULT_MARGIN_THRESHOLD = float(os.getenv("ROUTER_EMBEDDING_MARGIN_THRESHOLD", "0.04"))
 BenchmarkMode = Literal[
@@ -33,6 +41,10 @@ BenchmarkMode = Literal[
     "embedding_only",
     "current_hybrid",
     "embedding_hybrid",
+    "hashing_only",
+    "hashing_hybrid",
+    "sentence_embedding_only",
+    "sentence_embedding_hybrid",
 ]
 BenchmarkSplit = Literal["dev", "test", "all"]
 
@@ -201,7 +213,7 @@ def compute_metrics(
     }
 
     return {
-        "dataset_version": DATASET_VERSION,
+        "dataset_version": (metadata or {}).get("dataset_version", DATASET_VERSION),
         "mode": mode,
         "split": split,
         "total": total,
@@ -224,13 +236,18 @@ def compute_metrics(
 def build_route_fn(
     mode: BenchmarkMode,
     *,
+    embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    embedding_local_files_only: bool = DEFAULT_EMBEDDING_LOCAL_FILES_ONLY,
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     margin_threshold: float = DEFAULT_MARGIN_THRESHOLD,
 ) -> tuple[RouteFn, Callable[[], int], dict[str, Any]]:
     base_metadata = {
         "git_commit": _git_commit(),
+        "dataset_version": DATASET_VERSION,
+        "embedding_provider": "",
         "embedding_model": "",
+        "embedding_local_files_only": None,
         "llm_model": "",
         "similarity_threshold": None,
         "margin_threshold": None,
@@ -250,16 +267,23 @@ def build_route_fn(
         router = RequestRouter()
         return lambda user_input: router.route(user_input), lambda: 0, base_metadata
 
-    if mode == "embedding_only":
+    if mode in {"embedding_only", "hashing_only", "sentence_embedding_only"}:
+        provider, model = _resolve_embedding_config(mode, embedding_provider, embedding_model)
         constraint = ConstraintRouter()
         embedding_router = EmbeddingRouter(
-            embedder=HashingEmbedder(model_name=embedding_model),
+            embedder=build_embedder(
+                provider=provider,
+                model_name=model,
+                local_files_only=embedding_local_files_only,
+            ),
             similarity_threshold=similarity_threshold,
             margin_threshold=margin_threshold,
         )
         metadata = {
             **base_metadata,
+            "embedding_provider": embedding_router.provider,
             "embedding_model": embedding_router.model_name,
+            "embedding_local_files_only": embedding_local_files_only if provider == "sentence_transformers" else None,
             "similarity_threshold": similarity_threshold,
             "margin_threshold": margin_threshold,
         }
@@ -290,16 +314,23 @@ def build_route_fn(
             "llm_model": settings.local_llm_model,
         }
 
+    provider, model = _resolve_embedding_config(mode, embedding_provider, embedding_model)
     constraint = ConstraintRouter()
     embedding_router = EmbeddingRouter(
-        embedder=HashingEmbedder(model_name=embedding_model),
+        embedder=build_embedder(
+            provider=provider,
+            model_name=model,
+            local_files_only=embedding_local_files_only,
+        ),
         similarity_threshold=similarity_threshold,
         margin_threshold=margin_threshold,
     )
     llm_router = LLMRouter(counting)
     metadata = {
         **base_metadata,
+        "embedding_provider": embedding_router.provider,
         "embedding_model": embedding_router.model_name,
+        "embedding_local_files_only": embedding_local_files_only if provider == "sentence_transformers" else None,
         "llm_model": settings.local_llm_model,
         "similarity_threshold": similarity_threshold,
         "margin_threshold": margin_threshold,
@@ -314,6 +345,39 @@ def build_route_fn(
         )
 
     return route_with_embedding_hybrid, lambda: counting.count, metadata
+
+
+def _resolve_embedding_config(mode: str, provider: str, model_name: str) -> tuple[str, str]:
+    if mode in {"embedding_only", "embedding_hybrid"}:
+        provider = "hashing"
+    if mode in {"hashing_only", "hashing_hybrid"}:
+        provider = "hashing"
+    if mode in {"sentence_embedding_only", "sentence_embedding_hybrid"}:
+        provider = "sentence_transformers"
+
+    provider = provider.strip()
+    model_name = model_name.strip()
+    if provider == "hashing":
+        model = model_name or HASHING_MODEL
+        if model != HASHING_MODEL:
+            raise ValueError(
+                f"provider='hashing' only supports model='{HASHING_MODEL}', got '{model}'. "
+                "Use provider='sentence_transformers' for real sentence embedding models."
+            )
+        return provider, model
+    if provider == "sentence_transformers":
+        return provider, model_name or DEFAULT_SENTENCE_TRANSFORMER_MODEL
+    raise ValueError(f"Unknown embedding provider: {provider}")
+
+
+def build_embedder(*, provider: str, model_name: str, local_files_only: bool = False) -> Embedder:
+    if provider == "hashing":
+        if model_name != HASHING_MODEL:
+            raise ValueError(f"HashingEmbedder cannot be labeled as '{model_name}'.")
+        return HashingEmbedder()
+    if provider == "sentence_transformers":
+        return SentenceTransformerEmbedder(model_name=model_name, local_files_only=local_files_only)
+    raise ValueError(f"Unknown embedding provider: {provider}")
 
 
 def _route_embedding_cascade(
@@ -358,7 +422,9 @@ def run_benchmark(
     *,
     mode: BenchmarkMode,
     split: BenchmarkSplit = "test",
+    embedding_provider: str = DEFAULT_EMBEDDING_PROVIDER,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    embedding_local_files_only: bool = DEFAULT_EMBEDDING_LOCAL_FILES_ONLY,
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     margin_threshold: float = DEFAULT_MARGIN_THRESHOLD,
     dataset_path: Path = DATASET_PATH,
@@ -367,11 +433,15 @@ def run_benchmark(
     examples = filter_examples_by_split(load_dataset(dataset_path), split)
     route_fn, counter, metadata = build_route_fn(
         mode,
+        embedding_provider=embedding_provider,
         embedding_model=embedding_model,
+        embedding_local_files_only=embedding_local_files_only,
         similarity_threshold=similarity_threshold,
         margin_threshold=margin_threshold,
     )
     records, metrics = evaluate_examples(examples, route_fn, mode=mode, split=split, llm_call_count=counter)
+    metadata = {**metadata, "dataset_version": _dataset_version(dataset_path)}
+    metrics["dataset_version"] = metadata["dataset_version"]
     metrics["metadata"] = metadata
 
     out_dir = out_root / time.strftime("run_%Y%m%d_%H%M%S")
@@ -386,10 +456,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run router evaluation benchmark.")
     parser.add_argument(
         "--mode",
-        choices=["constraint_only", "lexical_baseline", "embedding_only", "current_hybrid", "embedding_hybrid"],
+        choices=[
+            "constraint_only",
+            "lexical_baseline",
+            "embedding_only",
+            "embedding_hybrid",
+            "hashing_only",
+            "hashing_hybrid",
+            "sentence_embedding_only",
+            "sentence_embedding_hybrid",
+            "current_hybrid",
+        ],
         default="lexical_baseline",
     )
+    parser.add_argument("--embedding-provider", default=DEFAULT_EMBEDDING_PROVIDER)
     parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
+    parser.add_argument("--embedding-local-files-only", action="store_true", default=DEFAULT_EMBEDDING_LOCAL_FILES_ONLY)
     parser.add_argument("--similarity-threshold", type=float, default=DEFAULT_SIMILARITY_THRESHOLD)
     parser.add_argument("--margin-threshold", type=float, default=DEFAULT_MARGIN_THRESHOLD)
     parser.add_argument("--split", choices=["dev", "test", "all"], default="test")
@@ -400,7 +482,9 @@ def main() -> None:
     out_dir, records, metrics = run_benchmark(
         mode=args.mode,
         split=args.split,
+        embedding_provider=args.embedding_provider,
         embedding_model=args.embedding_model,
+        embedding_local_files_only=args.embedding_local_files_only,
         similarity_threshold=args.similarity_threshold,
         margin_threshold=args.margin_threshold,
         dataset_path=Path(args.dataset),
@@ -421,6 +505,14 @@ def main() -> None:
         f"rate={metrics['llm_escalation_rate']:.3f})"
     )
     print(f"Report: {out_dir / 'report.md'}")
+
+
+def _dataset_version(path: Path) -> str:
+    if path.name == "dataset_v2.jsonl":
+        return "router-v2"
+    if path.name == "dataset.jsonl":
+        return DATASET_VERSION
+    return path.stem
 
 
 if __name__ == "__main__":

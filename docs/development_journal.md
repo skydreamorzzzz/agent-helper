@@ -529,3 +529,107 @@ LLM escalation rate 0.333
 3. cascade 不是简单把 Rule / Embedding / LLM 串起来就结束；还要设计硬约束边界、置信度阈值和 LLM override policy，否则会用更低成本换来不可接受的错路由。
 
 下一阶段更值得做的是调整 hard constraint / cascade policy，并在同一 `Embedder` 协议下接入真正的多语言 sentence embedding provider，而不是直接重构 Planner 或引入向量数据库。
+
+## Router Embedding 实验方法收尾：元数据真实性与严格 Holdout
+
+- 来源：Router embedding 实验可复现性收尾
+- 相关模块：`src/planner/embedding_router.py`、`evals/router/runner.py`、`evals/router/dataset_v2.jsonl`
+- 结论类型：实验方法修正
+
+### 问题
+
+上一轮 `EmbeddingRouter` v1 暴露出三个实验方法问题：
+
+1. `HashingEmbedder` 实际是 hashed lexical vector baseline，不是 neural sentence embedding。
+2. runner 里 `HashingEmbedder(model_name=embedding_model)` 会导致传入任意模型名时，实际算法仍是 hashing，但报告可能写成 `bge-m3` 或其他模型名，造成实验元数据失真。
+3. `router-v1/test` 已经被用于 failure analysis 和 prototype 讨论，因此不能再被当成严格独立 holdout score。
+
+这些问题如果不修，会让项目在面试或复盘时很难解释清楚：到底是在比较算法，还是只是在比较一个标签。
+
+### 解决
+
+把 embedding 配置显式拆成：
+
+```text
+embedding_provider
+embedding_model
+```
+
+当前支持：
+
+```text
+provider = hashing
+model    = hashing-multilingual-v1
+
+provider = sentence_transformers
+model    = BAAI/bge-small-zh-v1.5
+```
+
+未知 provider 会直接报错。`hashing` provider 也不能被任意 model 名伪装，例如不能把 hashing run 标成 `bge-m3`。
+
+同时修正 `EmbeddingRouter` 的 cosine 语义：Router 内部负责向量归一化和 zero vector 处理，不再隐含要求 provider 返回 normalized vectors。这样后续替换真实 embedding provider 时，不需要依赖 provider 的默认 normalization 配置。
+
+新增真实 sentence embedding provider：
+
+```text
+SentenceTransformerEmbedder
+```
+
+它通过 `sentence-transformers` 加载模型；依赖未安装时给出明确错误，不静默 fallback 到 hashing。本轮实际可复现模型为本地缓存的 `BAAI/bge-small-zh-v1.5`，并记录 `local_files_only=true`。
+
+最后新增 `router-v2`：
+
+```text
+evals/router/dataset_v2.jsonl
+```
+
+`router-v2` 是 test-only holdout，用于第一次 untouched evaluation。流程固定为：
+
+```text
+router-v1 dev
+-> 保持 prototype 不变
+-> 保持 similarity_threshold = 0.32
+-> 保持 margin_threshold = 0.04
+-> 第一次运行 router-v2
+-> 不根据 v2 failure 修改本轮配置
+```
+
+### 结果
+
+`router-v2` 首次 holdout：
+
+```text
+lexical_baseline:
+accuracy 0.361
+macro-F1 0.326
+
+hashing_only:
+accuracy 0.444
+macro-F1 0.446
+
+sentence_embedding_only:
+accuracy 0.583
+macro-F1 0.590
+
+current_hybrid:
+accuracy 0.889
+macro-F1 0.883
+LLM escalation rate 0.778
+
+sentence_embedding_hybrid:
+accuracy 0.861
+macro-F1 0.860
+LLM escalation rate 0.444
+```
+
+### 价值
+
+这次收尾把 embedding 实验从“看起来用了 embedding”改成了可审计实验：
+
+- provider 和 model 与实际执行实现一致；
+- hashing baseline 不再冒充 neural sentence embedding；
+- cosine 计算对任意 provider 更稳健；
+- `router-v2` 提供了新的 untouched holdout；
+- sentence embedding hybrid 的成本/准确率 trade-off 可以量化。
+
+当前最重要的剩余问题不是继续调 embedding threshold，而是 Router cascade policy：hard constraint 仍会抢先判定英文多步骤文件任务；embedding 的高置信错误也可能阻止 LLM 修正。这些都应该进入下一轮 Router 策略设计，而不是在本轮根据 v2 错例修规则。

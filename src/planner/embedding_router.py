@@ -4,13 +4,14 @@ import hashlib
 import math
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from src.planner.models import Route, RouteDecision
 from src.planner.router import RouteCandidate
 
 
 class Embedder(Protocol):
+    provider: str
     model_name: str
 
     def encode(self, texts: list[str]) -> list[list[float]]:
@@ -18,11 +19,13 @@ class Embedder(Protocol):
 
 
 class HashingEmbedder:
-    """Small local multilingual lexical embedder used as a dependency-free baseline."""
+    """Dependency-free hashed lexical vector baseline for router experiments."""
 
-    def __init__(self, *, dimensions: int = 384, model_name: str = "hashing-multilingual-v1") -> None:
+    provider = "hashing"
+    model_name = "hashing-multilingual-v1"
+
+    def __init__(self, *, dimensions: int = 384) -> None:
         self.dimensions = dimensions
-        self.model_name = model_name
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         return [self._encode_one(text) for text in texts]
@@ -55,6 +58,31 @@ class HashingEmbedder:
         compact = re.sub(r"\s+", " ", lowered).strip()
         features.extend(f"c3:{compact[index:index + 3]}" for index in range(max(0, len(compact) - 2)))
         return features
+
+
+class SentenceTransformerEmbedder:
+    provider = "sentence_transformers"
+
+    def __init__(self, *, model_name: str, model: Any | None = None, local_files_only: bool = False) -> None:
+        self.model_name = model_name
+        self.local_files_only = local_files_only
+        if model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:
+                raise RuntimeError(
+                    "sentence-transformers is required for provider='sentence_transformers'. "
+                    "Install the optional embedding dependencies first."
+                ) from exc
+            self._model = SentenceTransformer(model_name, local_files_only=local_files_only)
+        else:
+            self._model = model
+
+    def encode(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._model.encode(texts)
+        if hasattr(vectors, "tolist"):
+            vectors = vectors.tolist()
+        return [[float(value) for value in vector] for vector in vectors]
 
 
 DEFAULT_ROUTE_PROTOTYPES: dict[Route, tuple[str, ...]] = {
@@ -131,11 +159,15 @@ class EmbeddingRouter:
         self._prototype_vectors = self._embed_prototypes()
 
     @property
+    def provider(self) -> str:
+        return self.embedder.provider
+
+    @property
     def model_name(self) -> str:
         return self.embedder.model_name
 
     def route(self, user_input: str) -> RouteCandidate | None:
-        query_vector = self.embedder.encode([user_input])[0]
+        query_vector = self._normalize(self.embedder.encode([user_input])[0])
         scores = sorted(
             (
                 EmbeddingRouteScore(route=route, similarity=self._best_similarity(query_vector, vectors))
@@ -170,7 +202,7 @@ class EmbeddingRouter:
             for route, texts in self.prototypes.items()
             for text in texts
         ]
-        vectors = self.embedder.encode([text for _, text in flattened])
+        vectors = [self._normalize(vector) for vector in self.embedder.encode([text for _, text in flattened])]
         by_route: dict[Route, list[list[float]]] = {route: [] for route in self.prototypes}
         for (route, _), vector in zip(flattened, vectors):
             by_route[route].append(vector)
@@ -182,4 +214,12 @@ class EmbeddingRouter:
         return max(self._cosine(query_vector, vector) for vector in prototype_vectors)
 
     def _cosine(self, left: list[float], right: list[float]) -> float:
+        if not left or not right:
+            return 0.0
         return sum(lv * rv for lv, rv in zip(left, right))
+
+    def _normalize(self, vector: list[float]) -> list[float]:
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm == 0:
+            return [0.0 for _ in vector]
+        return [value / norm for value in vector]

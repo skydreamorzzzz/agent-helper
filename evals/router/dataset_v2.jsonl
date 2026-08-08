@@ -1,0 +1,36 @@
+{"id":"route_v2_001","input":"早上好，今天想简单聊两句","expected_route":"direct_answer","category":"casual_chat","language":"zh","note":"casual greeting","split":"test"}
+{"id":"route_v2_002","input":"Explain what dependency injection means in software design.","expected_route":"direct_answer","category":"stable_knowledge","language":"en","note":"stable programming concept","split":"test"}
+{"id":"route_v2_003","input":"解释一下 HTTP 状态码 404 的含义","expected_route":"direct_answer","category":"stable_knowledge","language":"zh","note":"stable web concept","split":"test"}
+{"id":"route_v2_004","input":"I have a URL like https://foo.test/v1/items. Explain the path parts, no tools.","expected_route":"direct_answer","category":"url_noise","language":"en","note":"url should remain conceptual","split":"test"}
+{"id":"route_v2_005","input":"写论文时 literature review 和 methods section 有什么区别？","expected_route":"direct_answer","category":"weak_research_keyword","language":"mixed","note":"research wording without external research intent","split":"test"}
+{"id":"route_v2_006","input":"What did RFC 9110 standardize at a high level?","expected_route":"direct_answer","category":"stable_knowledge","language":"en","note":"stable standards explanation","split":"test"}
+{"id":"route_v2_007","input":"算一下 88 * 12","expected_route":"single_tool","category":"calculator","language":"zh","note":"simple arithmetic","split":"test"}
+{"id":"route_v2_008","input":"Compute (45 + 9) / 6.","expected_route":"single_tool","category":"calculator","language":"en","note":"single calculation","split":"test"}
+{"id":"route_v2_009","input":"打开看看 meeting_notes.txt 里面写了什么","expected_route":"single_tool","category":"file_read","language":"zh","note":"single file read","split":"test"}
+{"id":"route_v2_010","input":"Read workspace_overview.md for me.","expected_route":"single_tool","category":"file_read","language":"en","note":"single file read","split":"test"}
+{"id":"route_v2_011","input":"把 OK 写到 status.txt","expected_route":"single_tool","category":"file_write","language":"zh","note":"single file write","split":"test"}
+{"id":"route_v2_012","input":"Save the word done into flag.md.","expected_route":"single_tool","category":"file_write","language":"en","note":"single file write","split":"test"}
+{"id":"route_v2_013","input":"Tavily 现在的免费额度是多少？","expected_route":"web_lookup","category":"current_fact","language":"mixed","note":"simple current pricing lookup","split":"test"}
+{"id":"route_v2_014","input":"Who currently leads Anthropic as CEO?","expected_route":"web_lookup","category":"current_fact","language":"en","note":"current office holder","split":"test"}
+{"id":"route_v2_015","input":"Python 最新稳定版是多少？","expected_route":"web_lookup","category":"current_version","language":"mixed","note":"latest software version","split":"test"}
+{"id":"route_v2_016","input":"今天美元兑人民币大概汇率是多少？","expected_route":"web_lookup","category":"current_price","language":"zh","note":"current market fact","split":"test"}
+{"id":"route_v2_017","input":"What is the newest Claude model announced by Anthropic?","expected_route":"web_lookup","category":"current_fact","language":"en","note":"latest product fact","split":"test"}
+{"id":"route_v2_018","input":"现在 GitHub Copilot 的个人版价格是多少？","expected_route":"web_lookup","category":"current_price","language":"mixed","note":"simple current pricing lookup","split":"test"}
+{"id":"route_v2_019","input":"读取 tasks.txt，挑出优先级最高的事项，然后写入 priority.md","expected_route":"planned_task","category":"file_transform","language":"zh","note":"read transform write","split":"test"}
+{"id":"route_v2_020","input":"Read raw_notes.md, turn it into bullets, and save the result as bullets.md.","expected_route":"planned_task","category":"file_transform","language":"en","note":"english multi-step file transform","split":"test"}
+{"id":"route_v2_021","input":"先计算 19 * 27，再把结果保存到 product.txt","expected_route":"planned_task","category":"calculate_then_write","language":"zh","note":"tool dependency","split":"test"}
+{"id":"route_v2_022","input":"Combine alpha.txt and beta.txt into a concise summary file named combined.md.","expected_route":"planned_task","category":"multi_file","language":"en","note":"multiple reads and write","split":"test"}
+{"id":"route_v2_023","input":"检查 log.txt 中的错误，整理成 incident_summary.md","expected_route":"planned_task","category":"file_analysis","language":"zh","note":"read analyze write","split":"test"}
+{"id":"route_v2_024","input":"Load draft_plan.md, shorten it, then store the revised text in short_plan.md.","expected_route":"planned_task","category":"file_transform","language":"en","note":"english multi-step file transform","split":"test"}
+{"id":"route_v2_025","input":"系统调研一下 2026 年 Agent 记忆系统的主流做法并比较优缺点","expected_route":"deep_research","category":"research_compare","language":"zh","note":"systematic comparison","split":"test"}
+{"id":"route_v2_026","input":"Investigate current open-source agent frameworks and write a cited comparison.","expected_route":"deep_research","category":"research_report","language":"en","note":"multi-source cited report","split":"test"}
+{"id":"route_v2_027","input":"比较 Tavily、SerpAPI 和 Exa 的最新价格、限制和适用场景","expected_route":"deep_research","category":"research_current_compare","language":"mixed","note":"current multi-provider comparison","split":"test"}
+{"id":"route_v2_028","input":"Research how teams evaluate long-term memory in personal assistants, with sources.","expected_route":"deep_research","category":"research_compare","language":"en","note":"research with sources","split":"test"}
+{"id":"route_v2_029","input":"写一份本地个人 Agent 项目的竞品分析报告","expected_route":"deep_research","category":"research_report","language":"zh","note":"report intent","split":"test"}
+{"id":"route_v2_030","input":"Deeply compare SQLite FTS, BM25, and embeddings for assistant memory retrieval.","expected_route":"deep_research","category":"research_compare","language":"en","note":"systematic comparison","split":"test"}
+{"id":"route_v2_031","input":"帮我读一下那个文件","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing file path","split":"test"}
+{"id":"route_v2_032","input":"Save this somewhere useful.","expected_route":"clarification","category":"missing_params","language":"en","note":"missing content and destination","split":"test"}
+{"id":"route_v2_033","input":"把上面的结论整理成文件","expected_route":"clarification","category":"missing_context","language":"zh","note":"missing prior context in standalone eval","split":"test"}
+{"id":"route_v2_034","input":"Analyze the attached data.","expected_route":"clarification","category":"missing_params","language":"en","note":"missing attachment/object","split":"test"}
+{"id":"route_v2_035","input":"做一个总结然后发给我","expected_route":"clarification","category":"missing_params","language":"zh","note":"missing source and delivery target","split":"test"}
+{"id":"route_v2_036","input":"Please update it and store the final version.","expected_route":"clarification","category":"missing_params","language":"en","note":"missing source and destination","split":"test"}

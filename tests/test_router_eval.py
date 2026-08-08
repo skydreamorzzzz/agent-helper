@@ -6,12 +6,14 @@ import pytest
 
 from evals.router.runner import (
     RouterExample,
+    build_embedder,
     build_route_fn,
     compute_metrics,
     evaluate_examples,
     filter_examples_by_split,
     load_dataset,
     _route_embedding_cascade,
+    _resolve_embedding_config,
 )
 from src.planner.models import Route, RouteDecision
 from src.planner.router import RouteCandidate
@@ -202,7 +204,70 @@ def test_embedding_only_does_not_call_llm() -> None:
     route_fn("Summarize and save it somewhere")
 
     assert counter() == 0
+    assert metadata["embedding_provider"] == "hashing"
     assert metadata["embedding_model"]
+
+
+def test_hashing_provider_metadata_is_truthful() -> None:
+    route_fn, counter, metadata = build_route_fn("hashing_only")
+
+    route_fn("当前 NVIDIA 股价是多少？")
+
+    assert counter() == 0
+    assert metadata["embedding_provider"] == "hashing"
+    assert metadata["embedding_model"] == "hashing-multilingual-v1"
+
+
+def test_unknown_embedding_provider_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unknown embedding provider"):
+        _resolve_embedding_config("custom_embedding", "unknown", "")
+
+
+def test_hashing_provider_cannot_be_labeled_as_arbitrary_model() -> None:
+    with pytest.raises(ValueError, match="only supports model"):
+        _resolve_embedding_config("hashing_only", "hashing", "bge-m3")
+
+    with pytest.raises(ValueError, match="cannot be labeled"):
+        build_embedder(provider="hashing", model_name="bge-m3")
+
+
+def test_runner_can_build_sentence_embedding_mode_with_truthful_metadata(monkeypatch) -> None:
+    import evals.router.runner as runner
+
+    class FakeEmbedder:
+        provider = "sentence_transformers"
+        model_name = "fake-multilingual-model"
+
+        def encode(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr(
+        runner,
+        "build_embedder",
+        lambda *, provider, model_name, local_files_only=False: FakeEmbedder(),
+    )
+
+    route_fn, counter, metadata = build_route_fn(
+        "sentence_embedding_only",
+        embedding_model="fake-multilingual-model",
+        similarity_threshold=0.0,
+        margin_threshold=0.0,
+    )
+
+    route_fn("anything")
+
+    assert counter() == 0
+    assert metadata["embedding_provider"] == "sentence_transformers"
+    assert metadata["embedding_model"] == "fake-multilingual-model"
+
+
+def test_router_v2_holdout_dataset_loads_without_accuracy_assertion() -> None:
+    examples = load_dataset(Path("evals/router/dataset_v2.jsonl"))
+
+    assert len(examples) == 36
+    assert {example.split for example in examples} == {"test"}
+    assert {example.expected_route for example in examples} == set(Route)
+    assert {"zh", "en"}.issubset({example.language for example in examples})
 
 
 class AlwaysUncertainEmbeddingRouter:
