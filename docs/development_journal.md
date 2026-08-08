@@ -313,3 +313,65 @@ retry_count 不增加
 ### 价值
 
 这次收尾说明权限策略必须建立在“已校验、已规范化”的输入上，否则安全判断会受模型 JSON 表达细节影响。同时，权限拒绝应该是终态决策，而不是普通错误恢复流程的一部分。面试时可以把它解释为：策略层不只统一入口，还明确了参数语义和失败语义。
+
+## Router 优化从手工错例转向 Benchmark 驱动
+
+- 来源：建立独立 Router Evaluation Dataset 和评测工具
+- 相关模块：`RequestRouter`、`ConstraintRouter`、`SemanticRouter`、`LLMRouter`、`evals/router`
+- 结论类型：评测体系建设
+
+### 问题
+
+过去 Router 的修改主要由少量手工失败案例驱动。例如发现 `latest` 被过度路由到 `deep_research`，或者发现英文 `research` 会误伤普通写作请求，就针对单个问题修规则。
+
+这种方式能快速修 bug，但无法回答几个更关键的问题：
+
+- 哪类请求最容易误路由；
+- Rule / LLM 各自贡献多少；
+- 后续引入 EmbeddingRouter 是否真的改善；
+- 一次规则改进是不是只修了一个 case，又破坏了另一个 case；
+- 当前 failure mode 是中文、英文、缺参、多步骤还是最新事实查询导致的。
+
+### 解决
+
+新增独立 Router benchmark：
+
+```text
+evals/router/
+  dataset.jsonl
+  runner.py
+  report.py
+```
+
+数据集第一版覆盖六类路由：
+
+```text
+direct_answer / single_tool / web_lookup / planned_task / deep_research / clarification
+```
+
+同时覆盖中英文、稳定知识 vs 最新事实、`web_lookup` vs `deep_research`、单工具 vs 多步骤、URL/日期/数字干扰、弱 `research` 关键词、缺参和少量 OOD 表述。
+
+Runner 支持：
+
+```text
+rule_only   不调用 LLM，使用 deterministic + semantic + fallback
+full_router 当前 RequestRouter + LLM
+```
+
+报告输出 accuracy、macro-F1、per-route precision/recall/F1、confusion matrix、category accuracy、LLM call count、LLM escalation rate 和代表性失败案例。
+
+### 价值
+
+这一步把 Router 迭代从 case-by-case debugging 升级为 measurable iteration。下一阶段如果引入 EmbeddingRouter，可以直接比较：
+
+```text
+Rule
+vs
+Embedding
+vs
+LLM
+vs
+Hybrid Cascade
+```
+
+而不是凭感觉判断“好像更聪明了”。这也更适合在简历项目中解释工程成熟度：先建立评测基线，再做模型或算法升级。
