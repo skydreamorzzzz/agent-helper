@@ -61,7 +61,7 @@ secrets/deepseek_api_key
 
 `secrets/` 已在 `.gitignore` 中，不会提交到 Git。也可以不用 key 文件，直接在 `.env` 中设置 `LOCAL_LLM_API_KEY`。
 
-深度调研功能需要额外的 `TAVILY_API_KEY`（在 [Tavily](https://tavily.com) 注册后获取，免费额度 1000 次/月）。不配置该 key 时，普通对话和普通计划不受影响，只有触发调研请求时才会提示缺少配置。
+简单联网查询和深度调研功能需要额外的 `TAVILY_API_KEY`（在 [Tavily](https://tavily.com) 注册后获取，免费额度 1000 次/月）。不配置该 key 时，普通对话和普通计划不受影响，只有触发 `web_lookup` 或 `deep_research` 时才会提示缺少配置。
 
 ## 启动
 
@@ -119,8 +119,27 @@ docs/pipeline.md
 - `read_text_file`：读取 `workspace/` 目录中的 UTF-8 文本文件。
 - `write_text_file`：向 `workspace/` 写入 UTF-8 文本，默认不覆盖已有文件，除非 `overwrite=true`。
 - `transform_text`：按指令转换或整理文本，由执行器拦截调用 LLM 完成（只读）。
-- `search_web`：通过 Tavily 联网搜索，返回标题、链接和内容摘要。仅供深度调研计划使用（`read_only`），普通任务看不到它。
+- `search_web`：通过 Tavily 联网搜索，返回标题、链接和内容摘要。供简单联网查询和深度调研使用（`read_only`），普通 core Runtime 看不到它。
 - `write_cited_report`：把收集到的搜索结果合成为带引用的中文 Markdown 报告并保存到 `workspace/reports/`（`write`），由执行器拦截调用 LLM 合成。
+
+工具注册表按能力分层：
+
+- `core_registry`：`calculator`、`read_text_file`、`write_text_file`、`transform_text`
+- `lookup_registry`：core tools + `search_web`
+- `research_registry`：lookup tools + `write_cited_report`
+
+`web_lookup` 使用 `lookup_registry`，可以搜索但不能生成研究报告。`deep_research` 使用 `research_registry`。普通对话和普通任务默认只使用 `core_registry`，不会意外获得联网能力。
+
+## 简单联网查询
+
+当请求需要最新、当前或外部信息，但只需要少量搜索即可直接回答时，Router 会进入 `web_lookup`：
+
+```text
+What is the latest Tavily API pricing?
+Who is the current CEO of X?
+```
+
+`web_lookup` 复用普通 `AgentRuntime`，区别只是工具注册表换成 `lookup_registry`。它不会调用 `write_cited_report`，也不会生成完整调研计划。
 
 ## 深度调研
 
@@ -132,7 +151,7 @@ docs/pipeline.md
 4. 最后 `write_cited_report` 步骤由执行器拦截：把所有搜索结果交给模型，合成一份带 `[来源](url)` 引用的中文 Markdown 报告，保存到 `workspace/reports/`。
 5. 单个搜索失败会自动重新生成计划，已完成步骤会保留。
 
-普通任务和普通对话看不到 `search_web` / `write_cited_report`，不会擅自发起联网请求。需要配置 `TAVILY_API_KEY` 才能使用。
+普通任务和普通对话看不到 `search_web` / `write_cited_report`，不会擅自发起联网请求。需要配置 `TAVILY_API_KEY` 才能使用联网能力。
 
 ## 三层记忆架构
 
@@ -262,18 +281,20 @@ Planner 前有一层 `RequestRouter`，输出结构化 JSON：
 
 - `direct_answer`：普通聊天或可直接回答的任务
 - `single_tool`：明显只需要一次工具调用的任务
+- `web_lookup`：需要最新、当前或外部信息，但只需少量搜索即可直接回答
 - `planned_task`：包含多个依赖步骤的复杂任务
 - `deep_research`：需要联网调研的主题，生成调研计划并产出一份带引用的报告
 - `clarification`：缺少执行所必需的信息，必须先问用户
 
 当前 Router 是分层多信号决策系统：
 
-1. `ConstraintRouter`：先处理硬约束和强确定性场景，例如缺少必要参数、明确联网调研、最新价格/新闻/版本信息、本地多步骤文件任务、明显单工具任务。
+1. `ConstraintRouter`：先处理硬约束和强确定性场景，例如缺少必要参数、明确联网调研、本地多步骤文件任务、明显单工具任务。`latest/current/价格/版本` 这类弱关键词只作为软信号，不直接定死为 `deep_research`。
 2. `SemanticRouter`：用轻量语义相似度匹配典型任务形态，作为 embedding router 的可替换占位层。
 3. `LLMRouter`：在约束层没有最终结论时，让 LLM 理解复杂意图和上下文。
 4. 规则兜底：LLM 输出非法或信号不足时，回到保守规则。
 
 普通聊天不会进入 Planner。信息不足时不会猜文件名、目标或保存位置。强确定性任务不会被 LLM 路由覆盖。
+简单实时事实查询会走 `web_lookup`；需要系统拆解、多来源比较、优缺点分析或保存研究报告时才走 `deep_research`。
 
 ## 结构化计划
 
@@ -416,7 +437,7 @@ python -m evals.run_eval --limit 30 --levels 1,2
 - `questions.jsonl`：逐题记录路由、步骤、搜索词、提取答案与期望答案
 - `selected_task_ids.json`：本次抽样题目清单（固定种子，可复现）
 
-评测依赖 LLM 路由：`RequestRouter` 接入 `llm_client` 后，规则先处理确定性场景（缺参数、显式调研关键词），其余请求由模型分类，事实性问题会自动判为 `deep_research` 并联网搜索。这会为每条自然语言消息增加一次 LLM 分类调用。
+评测依赖 LLM 路由：`RequestRouter` 接入 `llm_client` 后，规则先处理确定性场景（缺参数、显式调研关键词、明显单工具和多步骤任务），其余请求由模型分类。简单实时事实问题会进入 `web_lookup`，系统性调研问题才进入 `deep_research`。这会为每条自然语言消息增加一次 LLM 分类调用。
 
 本地小模型的绝对分数会偏低，评测的价值在于可复现基线、失败模式分析和驱动改进，而非数字本身。
 

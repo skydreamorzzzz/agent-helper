@@ -66,8 +66,34 @@ def test_english_research_word_alone_does_not_force_deep_research() -> None:
     assert decision.route != Route.DEEP_RESEARCH
 
 
-def test_current_information_constraint_routes_to_deep_research_without_llm() -> None:
+def test_current_information_constraint_routes_to_web_lookup_without_llm() -> None:
     decision = RequestRouter().route("What is the latest Tavily API pricing?")
+
+    assert decision.route == Route.WEB_LOOKUP
+
+
+def test_current_ceo_routes_to_web_lookup() -> None:
+    decision = RequestRouter().route("Who is the current CEO of OpenAI?")
+
+    assert decision.route == Route.WEB_LOOKUP
+
+
+def test_web_lookup_soft_constraint_beats_bad_direct_llm_route() -> None:
+    llm = StubLLM('{"route":"direct_answer","reason":"bad stale answer","missing_information":[]}')
+
+    decision = RequestRouter(llm).route("What is the latest Tavily API pricing?")
+
+    assert decision.route == Route.WEB_LOOKUP
+
+
+def test_software_version_explanation_stays_direct_answer() -> None:
+    decision = RequestRouter().route("解释一下软件版本号是什么")
+
+    assert decision.route == Route.DIRECT_ANSWER
+
+
+def test_memory_methods_comparison_routes_to_deep_research() -> None:
+    decision = RequestRouter().route("调研主流 Agent Memory 方法并比较")
 
     assert decision.route == Route.DEEP_RESEARCH
 

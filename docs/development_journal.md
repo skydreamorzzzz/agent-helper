@@ -114,3 +114,51 @@ ConstraintRouter -> SemanticRouter -> LLMRouter -> Rule fallback
 ### 价值
 
 这次改动把“路由”从一个 if/else 函数提升成了可解释的决策系统。面试时可以说明：我们先用测试暴露误路由，再把路由拆成硬约束、语义相似和 LLM 理解三个层次，避免单一信号导致错误，同时为未来 embedding router 留出扩展点。
+
+## 外部信息请求被过粗路由到 Deep Research
+
+- 来源：针对 Tavily 查询和 Router 的专项测试
+- 相关模块：`src/planner/router.py`、`src/planner/prompts.py`、`src/cli.py`、`ToolRegistry`
+- 结论类型：路由粒度和能力边界修正
+
+### 问题
+
+Router 之前把“需要外部信息”几乎都归到 `deep_research`。这会导致两个问题：
+
+1. “What is the latest Tavily API pricing?” 或 “Who is the current CEO of X?” 这种只需要少量搜索即可回答的问题，被迫进入深度调研计划，成本和交互复杂度都过高。
+2. `latest`、`price`、`version` 这类弱关键词如果被 ConstraintRouter 直接定死，容易误伤普通解释类问题，例如“解释一下软件版本号是什么”。
+
+更深层的问题是，路由层同时承担了“识别实时信息需求”和“决定是否做研究报告”两个不同职责，导致粒度过粗。
+
+### 解决
+
+新增 `web_lookup` 路由，专门表示简单实时或外部信息查询：
+
+```text
+direct_answer     普通知识或聊天
+single_tool       明确单工具任务
+web_lookup        少量联网搜索后直接回答
+planned_task      本地多步骤工具任务
+deep_research     多来源调研、比较、报告产出
+clarification     关键参数缺失
+```
+
+同时收紧 ConstraintRouter：
+
+- 缺参、明显单工具、明确多步骤文件任务、显式“调研/研究报告”仍是硬约束。
+- `latest/current/价格/版本` 这类词只作为软启发式信号，默认产出 `web_lookup`，不再直接 final 到 `deep_research`。
+- 如果 LLM 把明显的简单实时查询误判成 `direct_answer`，融合层会优先 `web_lookup`，避免过时回答；如果 LLM 判断成 `deep_research` 或 `clarification`，仍允许更复杂路线覆盖。
+
+工具能力也按 registry 分层：
+
+```text
+core_registry      本地基础工具
+lookup_registry    core + search_web
+research_registry  lookup + write_cited_report
+```
+
+这样普通 Runtime 默认没有联网能力，`web_lookup` 可以搜索但不能写研究报告，`deep_research` 才能搜索并生成带引用报告。
+
+### 价值
+
+这次问题说明 Router 不只是分类器，还承担能力授权边界。好的路由设计需要区分硬约束和软启发式，也要区分“查一下即可回答”和“需要系统研究产出”。面试时可以说明：先用失败用例证明 `deep_research` 粒度过粗，再通过新增中间路由、收紧 ConstraintRouter、分层 ToolRegistry，把成本、权限和任务复杂度对齐。

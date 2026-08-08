@@ -19,7 +19,7 @@ def build_system_prompt(
         '{"type":"tool_call","tool":"tool_name","arguments":{}}\n'
         '{"type":"final_answer","content":"answer text"}\n\n'
         "Rules:\n"
-        "- Use tools when needed to compute or read/write workspace files.\n"
+        "- Use tools when needed to compute, search web, or read/write workspace files.\n"
         "- Do not invent tool results.\n"
         "- Do not request shell, Python, OS commands, or non-registered tools.\n"
         "- After receiving tool results, continue with another tool_call if needed or final_answer.\n\n"

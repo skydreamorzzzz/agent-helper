@@ -9,7 +9,7 @@
   -> CLI 命令判断
   -> 记忆检索
   -> 请求路由
-  -> 直接回答 / 单工具 Runtime / 结构化 Planner / 澄清问题
+  -> 直接回答 / 单工具 Runtime / 简单联网查询 / 结构化 Planner / 深度调研 / 澄清问题
   -> 工具执行或计划状态机
   -> 最终回答
   -> 日志记录
@@ -114,7 +114,7 @@ src/tools/
 - `calculator.py`：安全数学计算。
 - `file_tools.py`：读取和写入 `workspace/` 内的 UTF-8 文件。
 - `transform_text.py`：只读文本转换工具，由执行器调用 LLM 完成文本整理。
-- `search_web.py`：Tavily 联网搜索，只返回标题/链接/摘要（`read_only`），仅供深度调研计划使用。
+- `search_web.py`：Tavily 联网搜索，只返回标题/链接/摘要（`read_only`），供 `web_lookup` 和深度调研使用。
 - `cited_report.py`：`write_cited_report` 的 stub 工具，由执行器拦截调用 LLM 合成带引用的报告并写入 `workspace/reports/`。
 
 职责：
@@ -130,6 +130,21 @@ src/tools/
 - 工具不直接访问长期记忆。
 - `write_text_file` 只写文件，不负责理解、筛选、总结文本。
 - 文本理解和整理应放在 `transform_text`，这也是一次真实全链路测试后沉淀出的边界。
+
+Registry 分层：
+
+```text
+core_registry
+  calculator / read_text_file / write_text_file / transform_text
+
+lookup_registry
+  core tools + search_web
+
+research_registry
+  lookup tools + write_cited_report
+```
+
+普通 Runtime 默认使用 `core_registry`，不会获得联网能力。`web_lookup` 使用 `lookup_registry`，可以搜索但不能写研究报告。`deep_research` 使用 `research_registry`，才允许搜索并生成带引用报告。
 
 ## 6. 记忆系统
 
@@ -178,15 +193,17 @@ src/planner/router.py
 - 判断请求属于哪类：
   - `direct_answer`
   - `single_tool`
+  - `web_lookup`
   - `planned_task`
   - `deep_research`
   - `clarification`
 - Router 是分层多信号系统：
-  - `ConstraintRouter`：处理硬约束和强确定性场景，例如缺参数、明确联网调研、最新价格/新闻/版本信息、本地多步骤文件任务、明显单工具任务。
+  - `ConstraintRouter`：处理硬约束和强确定性场景，例如缺参数、明确联网调研、本地多步骤文件任务、明显单工具任务。对“latest/current/价格/版本”等实时信息只产出软信号，不直接定死为深度调研。
   - `SemanticRouter`：用轻量相似度匹配典型任务形态，作为未来 embedding router 的可替换占位层。
   - `LLMRouter`：在约束层没有最终结论时，理解复杂意图、上下文和组合任务。
   - 规则兜底：LLM 输出非法或信号不足时，回到保守规则。
 - 强确定性任务不会被 LLM 覆盖，例如“计算 23 * 7”不会因为 LLM 误判而进入 `deep_research`。
+- 简单实时事实查询进入 `web_lookup`，例如价格、现任 CEO、最新版本；需要多来源比较、系统拆解和报告产出的请求才进入 `deep_research`。
 - 普通聊天不进入 Planner。
 - 多步骤依赖任务进入 Planner。
 - 缺少关键参数时要求澄清。

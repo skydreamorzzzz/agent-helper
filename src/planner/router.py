@@ -40,9 +40,9 @@ class ConstraintRouter:
             )
         if self._requires_current_information(text):
             return RouteCandidate(
-                RouteDecision(route=Route.DEEP_RESEARCH, reason="约束路由：请求依赖最新或当前外部信息，必须允许联网检索。"),
-                confidence=0.95,
-                final=True,
+                RouteDecision(route=Route.WEB_LOOKUP, reason="启发式路由：请求依赖最新或当前外部信息，但未要求系统调研。"),
+                confidence=0.72,
+                final=False,
                 source="constraint",
             )
         if self._looks_research(text):
@@ -79,30 +79,22 @@ class ConstraintRouter:
         return any(action in text for action in vague_actions) and not re.search(r"[\w\-]+\.txt|[\w\-]+\.md", text)
 
     def _requires_current_information(self, text: str) -> bool:
-        direct_markers = (
-            "latest",
-            "recent",
-            "pricing",
-            "news",
-            "最新",
-            "最近",
-            "价格",
-            "新闻",
-            "版本",
+        simple_external_patterns = (
+            r"\blatest\b.*\b(price|pricing|status|version|release|news|api)\b",
+            r"\bcurrent\b.*\b(ceo|cto|president|prime minister|price|pricing|status|version|release|news)\b",
+            r"\bwho is\b.*\bcurrent\b",
+            r"\bwhat is\b.*\blatest\b",
+            r"(当前|现在).*(ceo|cto|负责人|总统|主席|价格|状态|版本|新闻)",
+            r"(最新|最近).*(价格|状态|版本|发布|新闻|api)",
         )
-        contextual_patterns = (
-            r"\bcurrent\b.*\b(price|pricing|status|version|release|news)\b",
-            r"\b(today|now)\b.*\b(price|pricing|status|version|release|news)\b",
-            r"(当前|现在|今天).*(价格|版本|发布|新闻|状态)",
-        )
-        return any(marker in text for marker in direct_markers) or any(
-            re.search(pattern, text) for pattern in contextual_patterns
-        )
+        return any(re.search(pattern, text) for pattern in simple_external_patterns)
 
     def _looks_research(self, text: str) -> bool:
         chinese_markers = ("调研", "深度研究", "研究报告", "调查报告")
         english_markers = ("deep research", "research report", "investigate online", "web research", "deep dive")
-        return any(marker in text for marker in chinese_markers) or any(marker in text for marker in english_markers)
+        comparison_markers = ("比较", "对比", "优缺点", "pros and cons", "compare")
+        research_intent = any(marker in text for marker in chinese_markers) or any(marker in text for marker in english_markers)
+        return research_intent or (("research" in text or "调研" in text) and any(marker in text for marker in comparison_markers))
 
     def _looks_single_tool(self, text: str) -> bool:
         has_file_path = bool(re.search(r"[\w\-]+\.(txt|md)", text))
@@ -127,10 +119,15 @@ class SemanticRouter:
     def __init__(self, *, threshold: float = 0.42) -> None:
         self.threshold = threshold
         self.examples: dict[Route, tuple[str, ...]] = {
+            Route.WEB_LOOKUP: (
+                "latest api pricing simple lookup",
+                "current ceo who is simple external fact",
+                "最新 价格 当前 ceo 简单 查询",
+            ),
             Route.DEEP_RESEARCH: (
-                "latest api pricing current information",
-                "compare recent tools with web sources",
-                "调研 最新 价格 联网 搜索 研究报告",
+                "compare recent tools with multiple web sources",
+                "systematic research report pros and cons",
+                "调研 比较 优缺点 研究报告 多来源",
             ),
             Route.PLANNED_TASK: (
                 "read file summarize and save result",
@@ -221,10 +218,16 @@ class RequestRouter:
         if self.llm_router is not None:
             llm_decision = self.llm_router._route_with_llm(user_input, memory_context=memory_context)
             if llm_decision is not None:
+                if (
+                    constraint is not None
+                    and constraint.decision.route == Route.WEB_LOOKUP
+                    and llm_decision.route == Route.DIRECT_ANSWER
+                ):
+                    return constraint.decision
                 return llm_decision
 
-        if semantic is not None:
-            return semantic.decision
         if constraint is not None:
             return constraint.decision
+        if semantic is not None:
+            return semantic.decision
         return self.constraint_router.fallback(user_input)

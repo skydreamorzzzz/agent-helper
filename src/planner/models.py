@@ -12,6 +12,7 @@ from src.memory.models import utc_now_iso
 class Route(StrEnum):
     DIRECT_ANSWER = "direct_answer"
     SINGLE_TOOL = "single_tool"
+    WEB_LOOKUP = "web_lookup"
     PLANNED_TASK = "planned_task"
     DEEP_RESEARCH = "deep_research"
     CLARIFICATION = "clarification"
@@ -103,4 +104,3 @@ class ExecutionResult(BaseModel):
         "confirmation_required",
         "replan_limit_reached",
     ]
-

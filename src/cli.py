@@ -33,9 +33,14 @@ def build_registry() -> ToolRegistry:
     return registry
 
 
-def build_research_registry(api_key: str = "") -> ToolRegistry:
+def build_lookup_registry(api_key: str = "") -> ToolRegistry:
     registry = build_registry()
     registry.register(SearchWebTool(api_key))
+    return registry
+
+
+def build_research_registry(api_key: str = "") -> ToolRegistry:
+    registry = build_lookup_registry(api_key)
     registry.register(WriteCitedReportTool())
     return registry
 
@@ -55,6 +60,7 @@ def main() -> None:
     plan_repository = PlanRepository()
     router = RequestRouter(llm_client)
     core_registry = build_registry()
+    lookup_registry = build_lookup_registry(settings.tavily_api_key)
     research_registry = build_research_registry(settings.tavily_api_key)
     planner = StructuredPlanner(llm_client, core_registry, max_steps=settings.planner_max_steps)
     research_planner = StructuredPlanner(llm_client, research_registry, max_steps=settings.planner_max_steps)
@@ -63,6 +69,15 @@ def main() -> None:
     runtime = AgentRuntime(
         llm_client=llm_client,
         tool_registry=core_registry,
+        max_tool_calls=settings.max_tool_calls,
+        memory_service=memory_service,
+        working_memory_max_messages=settings.working_memory_max_messages,
+        working_memory_max_chars=settings.working_memory_max_chars,
+        summary_trigger_messages=settings.summary_trigger_messages,
+    )
+    lookup_runtime = AgentRuntime(
+        llm_client=llm_client,
+        tool_registry=lookup_registry,
         max_tool_calls=settings.max_tool_calls,
         memory_service=memory_service,
         working_memory_max_messages=settings.working_memory_max_messages,
@@ -111,6 +126,14 @@ def main() -> None:
         route_decision = router.route(user_input, memory_context=memory_context.block)
         if route_decision.route == Route.CLARIFICATION:
             print("Assistant: " + " ".join(route_decision.missing_information))
+            continue
+        if route_decision.route == Route.WEB_LOOKUP:
+            if not settings.tavily_api_key:
+                print("Assistant: 未配置 TAVILY_API_KEY，无法执行联网查询。请在 .env 中设置 TAVILY_API_KEY 后重启。")
+                continue
+            result = lookup_runtime.run(user_input)
+            print(f"Assistant: {result.content}")
+            print(f"[run_id: {result.run_id}]")
             continue
         if route_decision.route in (Route.PLANNED_TASK, Route.DEEP_RESEARCH):
             is_research = route_decision.route == Route.DEEP_RESEARCH

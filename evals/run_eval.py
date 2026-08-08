@@ -6,7 +6,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from src.cli import build_research_registry
+from src.cli import build_lookup_registry, build_research_registry
 from src.config import load_settings
 from src.llm.client import LocalLLMClient
 
@@ -41,6 +41,7 @@ def main() -> None:
         model=settings.local_llm_model,
         timeout=settings.local_llm_timeout,
     )
+    lookup_registry = build_lookup_registry(settings.tavily_api_key)
     research_registry = build_research_registry(settings.tavily_api_key)
 
     data_dir = Path("evals/data")
@@ -73,6 +74,7 @@ def main() -> None:
                 rec = run_question(
                     q,
                     llm_client=llm_client,
+                    lookup_registry=lookup_registry,
                     research_registry=research_registry,
                     settings=settings,
                     workspace_root=workspace_root,

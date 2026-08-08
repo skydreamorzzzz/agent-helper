@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 import src.planner.executor as executor_module
+from src.cli import build_lookup_registry, build_registry, build_research_registry
 from src.planner.executor import PlanExecutor
 from src.planner.models import Plan, PlanStep, Route, StepStatus
 from src.planner.repository import PlanRepository
@@ -75,6 +76,19 @@ def test_search_web_builds_tavily_payload(monkeypatch) -> None:
 def test_search_web_requires_api_key() -> None:
     with pytest.raises(ToolExecutionError):
         SearchWebTool().execute(SearchWebArguments(query="hello"))
+
+
+def test_registry_layers_keep_network_and_report_tools_separate() -> None:
+    core_tools = {tool["name"] for tool in build_registry().list_tools()}
+    lookup_tools = {tool["name"] for tool in build_lookup_registry("test-key").list_tools()}
+    research_tools = {tool["name"] for tool in build_research_registry("test-key").list_tools()}
+
+    assert "search_web" not in core_tools
+    assert "write_cited_report" not in core_tools
+    assert "search_web" in lookup_tools
+    assert "write_cited_report" not in lookup_tools
+    assert "search_web" in research_tools
+    assert "write_cited_report" in research_tools
 
 
 def test_search_web_raises_on_http_error(monkeypatch) -> None:

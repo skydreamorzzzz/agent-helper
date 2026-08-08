@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.agent.runtime import AgentRuntime
-from src.cli import build_research_registry
+from src.cli import build_registry, build_lookup_registry, build_research_registry
 from src.config import LOGS_DIR
 from src.llm.client import LocalLLMClient
 from src.planner.executor import PlanExecutor
@@ -213,6 +213,7 @@ def run_question(
     q: GaiaQuestion,
     *,
     llm_client: LocalLLMClient,
+    lookup_registry: ToolRegistry,
     research_registry: ToolRegistry,
     settings,
     workspace_root: Path,
@@ -227,9 +228,15 @@ def run_question(
     router = RequestRouter(counting)
     research_planner = StructuredPlanner(counting, research_registry, max_steps=settings.planner_max_steps)
     validator = PlanValidator(research_registry, max_steps=settings.planner_max_steps)
-    runtime = AgentRuntime(
+    core_runtime = AgentRuntime(
         llm_client=counting,
-        tool_registry=research_registry,
+        tool_registry=build_registry(),
+        max_tool_calls=settings.max_tool_calls,
+        memory_service=None,
+    )
+    lookup_runtime = AgentRuntime(
+        llm_client=counting,
+        tool_registry=lookup_registry,
         max_tool_calls=settings.max_tool_calls,
         memory_service=None,
     )
@@ -239,8 +246,10 @@ def run_question(
 
     if decision.route == Route.DEEP_RESEARCH:
         _run_research(rec, q, counting, research_registry, settings, repo, validator, research_planner, q_dir)
+    elif decision.route == Route.WEB_LOOKUP:
+        _run_runtime(rec, q, lookup_runtime)
     else:
-        _run_runtime(rec, q, runtime)
+        _run_runtime(rec, q, core_runtime)
 
     rec.llm_calls = counting.count
     if rec.agent_output:
