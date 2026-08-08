@@ -126,6 +126,30 @@ def test_write_text_file_runtime_requires_confirmation_before_execution() -> Non
     assert confirmations == [("write_text_file", RiskLevel.WRITE, "write action requires confirmation")]
 
 
+def test_runtime_normalizes_arguments_before_policy_confirmation_and_execution() -> None:
+    write_tool = FakeWriteTextFileTool()
+    registry = build_registry()
+    registry.register(write_tool)
+    confirmed_arguments: list[dict[str, Any]] = []
+
+    runtime = AgentRuntime(
+        llm_client=MockLLM(
+            [
+                '{"type":"tool_call","tool":"write_text_file","arguments":{"path":"a.txt","content":"hello","overwrite":"false"}}',
+                '{"type":"final_answer","content":"written"}',
+            ]
+        ),
+        tool_registry=registry,
+        confirmation_callback=lambda tool, args, risk, reason: confirmed_arguments.append(args) or True,
+    )
+
+    result = runtime.run("写入 a.txt")
+
+    assert result.stopped_reason == "final_answer"
+    assert confirmed_arguments == [{"path": "a.txt", "content": "hello", "overwrite": False}]
+    assert write_tool.calls[0].overwrite is False
+
+
 def test_write_text_file_runtime_rejection_prevents_execution() -> None:
     write_tool = FakeWriteTextFileTool()
     registry = build_registry()

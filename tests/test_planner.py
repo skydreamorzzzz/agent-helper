@@ -13,11 +13,18 @@ from src.planner.validator import PlanValidator
 from src.tools.base import Tool
 from src.tools.calculator import CalculatorTool
 from src.tools.file_tools import ReadTextFileTool, WriteTextFileTool
+from src.tools.policy import PolicyAction, PolicyDecision, ToolExecutionPolicy
 from src.tools.registry import ToolRegistry
 
 
 class EchoArguments(BaseModel):
     value: str
+
+
+class WriteArguments(BaseModel):
+    path: str
+    content: str
+    overwrite: bool = False
 
 
 class EchoTool(Tool):
@@ -52,6 +59,25 @@ class DestructiveTool(Tool):
 
     def execute(self, arguments: EchoArguments) -> str:
         return "destroyed"
+
+
+class RecordingWriteTool(Tool):
+    name = "write_text_file"
+    description = "Record write arguments"
+    argument_schema = WriteArguments
+    risk_level = RiskLevel.WRITE
+
+    def __init__(self) -> None:
+        self.calls: list[WriteArguments] = []
+
+    def execute(self, arguments: WriteArguments) -> str:
+        self.calls.append(arguments)
+        return "written"
+
+
+class DenyPolicy(ToolExecutionPolicy):
+    def evaluate(self, *, tool: Tool, arguments: dict, confirm_write_actions: bool) -> PolicyDecision:
+        return PolicyDecision(PolicyAction.DENY, "test deny", RiskLevel(tool.risk_level))
 
 
 def make_registry(*tools: Tool) -> ToolRegistry:
@@ -202,6 +228,62 @@ def test_write_tool_uses_shared_policy_and_requires_confirmation(tmp_path: Path)
     assert result.stopped_reason == "confirmation_required"
     assert result.plan.status == PlanStatus.PAUSED
     assert "write action requires confirmation" in result.final_answer
+
+
+def test_plan_executor_normalizes_arguments_before_policy_confirmation_and_execution(tmp_path: Path) -> None:
+    write_tool = RecordingWriteTool()
+    confirmed_arguments: list[dict] = []
+    plan = Plan(
+        goal="write",
+        steps=[
+            PlanStep(
+                id="s1",
+                description="write",
+                tool_name="write_text_file",
+                arguments={"path": "a.txt", "content": "x", "overwrite": "false"},
+            )
+        ],
+    )
+
+    result = PlanExecutor(
+        registry=make_registry(write_tool),
+        repository=make_repo(tmp_path),
+        confirmation_callback=lambda plan, step, risk, reason: confirmed_arguments.append(step.arguments) or True,
+    ).execute(plan)
+
+    assert result.stopped_reason == "completed"
+    assert confirmed_arguments == [{"path": "a.txt", "content": "x", "overwrite": False}]
+    assert result.plan.steps[0].arguments["overwrite"] is False
+    assert write_tool.calls[0].overwrite is False
+
+
+def test_policy_deny_stops_plan_without_retry_or_replan(tmp_path: Path) -> None:
+    calls: list[str] = []
+    replan_called = False
+    plan = Plan(
+        goal="deny",
+        steps=[PlanStep(id="s1", description="echo", tool_name="echo", arguments={"value": "x"})],
+    )
+
+    def replan_callback(old_plan: Plan, reason: str) -> Plan:
+        nonlocal replan_called
+        replan_called = True
+        return old_plan
+
+    result = PlanExecutor(
+        registry=make_registry(EchoTool(calls)),
+        repository=make_repo(tmp_path),
+        max_retries=2,
+        replan_callback=replan_callback,
+        tool_policy=DenyPolicy(),
+    ).execute(plan)
+
+    assert result.stopped_reason == "tool_policy_denied"
+    assert result.plan.steps[0].retry_count == 0
+    assert result.plan.steps[0].status == StepStatus.FAILED
+    assert "权限策略阻止" in result.final_answer
+    assert calls == []
+    assert not replan_called
 
 
 def test_completed_steps_preserved_on_replan(tmp_path: Path) -> None:

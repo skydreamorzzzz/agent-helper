@@ -268,3 +268,48 @@ Runtime 如果需要确认但没有 callback，或者用户拒绝，会安全停
 ### 价值
 
 这次问题说明安全边界不能只靠工具声明，也不能只在某一条执行路径里实现。工具元数据只有被执行层统一解释，才会成为真正的权限策略。面试时可以强调：发现 Runtime 和 Planner 对同一风险工具行为不一致后，把风险判断抽成共享 policy，避免未来新增执行入口时再次绕过确认。
+
+## ToolExecutionPolicy 的参数规范化和 DENY 语义收尾
+
+- 来源：统一工具执行权限策略的最终验收
+- 相关模块：`ToolRegistry`、`ToolExecutionPolicy`、`AgentRuntime`、`PlanExecutor`
+- 结论类型：安全策略细节修正
+
+### 问题
+
+统一 policy 后还有两个细节风险：
+
+1. Runtime 和 PlanExecutor 可能把模型给出的 raw arguments 直接传给 policy。这样 `"overwrite": "false"` 这种字符串在 Python 里如果直接 `bool("false")` 会变成 `True`，导致 policy 基于未规范化参数做出错误判断。
+2. PlanExecutor 中 `PolicyAction.DENY` 如果通过异常进入普通 step failure 流程，会被当成临时工具失败处理，进而触发 retry 或 replan。但权限拒绝不是临时失败，重试和重规划都不应该绕过它。
+
+### 解决
+
+在 `ToolRegistry` 增加统一参数规范化入口：
+
+```text
+raw arguments
+-> Pydantic schema validation
+-> model_dump normalized arguments
+-> ToolExecutionPolicy
+-> confirmation
+-> execute
+```
+
+Runtime 和 PlanExecutor 都使用同一份 normalized arguments：
+
+- policy 看到 normalized arguments。
+- confirmation 展示 normalized arguments。
+- 工具执行也使用 normalized arguments。
+
+PlanExecutor 遇到 `PolicyAction.DENY` 时直接停止当前 plan：
+
+```text
+stopped_reason = tool_policy_denied
+retry_count 不增加
+不触发 replan
+不执行工具
+```
+
+### 价值
+
+这次收尾说明权限策略必须建立在“已校验、已规范化”的输入上，否则安全判断会受模型 JSON 表达细节影响。同时，权限拒绝应该是终态决策，而不是普通错误恢复流程的一部分。面试时可以把它解释为：策略层不只统一入口，还明确了参数语义和失败语义。

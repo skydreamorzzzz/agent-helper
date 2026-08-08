@@ -243,9 +243,10 @@ class AgentRuntime:
     def _execute_tool(self, tool_call: ToolCall, logger: logging.Logger) -> tuple[str, str | None]:
         try:
             tool = self.tool_registry.get(tool_call.tool)
+            normalized_arguments = self.tool_registry.normalize_arguments(tool_call.tool, tool_call.arguments)
             decision = self.tool_policy.evaluate(
                 tool=tool,
-                arguments=tool_call.arguments,
+                arguments=normalized_arguments,
                 confirm_write_actions=self.confirm_write_actions,
             )
             log_event(
@@ -265,7 +266,7 @@ class AgentRuntime:
                 if self.confirmation_callback is not None:
                     approved = self.confirmation_callback(
                         tool_call.tool,
-                        tool_call.arguments,
+                        normalized_arguments,
                         decision.risk_level,
                         decision.reason,
                     )
@@ -281,7 +282,7 @@ class AgentRuntime:
                     result = {"ok": False, "error": f"Tool execution requires confirmation: {decision.reason}"}
                     log_event(logger, "tool_result", tool=tool_call.tool, result=result)
                     return json.dumps(result, ensure_ascii=False), "tool_confirmation_rejected"
-            result = self.tool_registry.execute(tool_call.tool, tool_call.arguments)
+            result = self.tool_registry.execute(tool_call.tool, normalized_arguments)
         except (UnknownToolError, ToolArgumentError) as exc:
             result = {"ok": False, "error": str(exc)}
         except Exception as exc:

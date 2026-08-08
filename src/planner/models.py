@@ -103,4 +103,5 @@ class ExecutionResult(BaseModel):
         "cancelled",
         "confirmation_required",
         "replan_limit_reached",
+        "tool_policy_denied",
     ]

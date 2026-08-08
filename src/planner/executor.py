@@ -91,10 +91,11 @@ class PlanExecutor:
             try:
                 tool = self.registry.get(step.tool_name)
                 resolved_arguments = self._resolve_arguments_if_needed(plan, step)
-                tool.argument_schema.model_validate(resolved_arguments)
+                normalized_arguments = self.registry.normalize_arguments(step.tool_name, resolved_arguments)
+                step.arguments = normalized_arguments
                 decision = self.tool_policy.evaluate(
                     tool=tool,
-                    arguments=resolved_arguments,
+                    arguments=normalized_arguments,
                     confirm_write_actions=self.confirm_write_actions,
                 )
                 self._log(
@@ -107,7 +108,15 @@ class PlanExecutor:
                     reason=decision.reason,
                 )
                 if decision.action == PolicyAction.DENY:
-                    raise RuntimeError(f"Tool execution denied: {decision.reason}")
+                    step.status = StepStatus.FAILED
+                    step.error = f"Tool execution denied: {decision.reason}"
+                    plan.status = PlanStatus.FAILED
+                    self.repository.save(plan)
+                    return ExecutionResult(
+                        plan=plan,
+                        final_answer=f"工具执行被权限策略阻止：{decision.reason}",
+                        stopped_reason="tool_policy_denied",
+                    )
                 if decision.action == PolicyAction.CONFIRM:
                     approved = self._confirm(plan, step, decision.risk_level, decision.reason)
                     self._log(
@@ -129,8 +138,7 @@ class PlanExecutor:
                             final_answer=f"步骤 {step.id} 需要确认：{decision.reason}",
                             stopped_reason="confirmation_required",
                         )
-                result = self._execute_tool(plan, step.tool_name, resolved_arguments)
-                step.arguments = resolved_arguments
+                result = self._execute_tool(plan, step.tool_name, normalized_arguments)
                 if result.get("ok"):
                     step.actual_output = result["result"]
                     step.status = StepStatus.COMPLETED

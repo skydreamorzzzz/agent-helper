@@ -37,6 +37,14 @@ class ToolRegistry:
     def describe_tools(self) -> str:
         return json.dumps(self.list_tools(), ensure_ascii=False, indent=2)
 
+    def normalize_arguments(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        tool = self.get(name)
+        try:
+            validated = tool.argument_schema.model_validate(arguments)
+        except ValidationError as exc:
+            raise ToolArgumentError(str(exc)) from exc
+        return validated.model_dump()
+
     def execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         tool = self.get(name)
         try:
@@ -49,4 +57,3 @@ class ToolRegistry:
             return {"ok": True, "result": result}
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-
