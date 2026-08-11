@@ -1,5 +1,137 @@
 # 开发复盘记录
 
+## E2E Evaluation Semantics v1.1：区分 deterministic integration 与真实 Agent 质量
+
+- 来源：审查 `End-to-End Agent Evaluation v1` 指标语义
+- 相关模块：`evals/agent/dataset.jsonl`、`evals/agent/runner.py`、`evals/agent/evaluators.py`、`evals/agent/report.py`
+- 结论类型：评测语义修正
+
+### 问题
+
+第一版 E2E evaluation 已经能跑通完整链路：
+
+```text
+用户请求 -> Router -> Runtime / Planner -> Tools -> Policy / Confirmation -> Final Answer
+```
+
+但进一步审查发现，v1 的 `87.5%` 不能直接解释为真实 Agent task success rate，原因是：
+
+```text
+route correctness != task success
+tool proposal != tool execution
+permission rejection != task failure
+deterministic fake-model integration != real Agent quality
+```
+
+具体来说：
+
+- `CountingFakeLLM` 在 Router 阶段使用 `expected_route` 生成确定性输出，Planner fake 也按 case 构造预期计划，因此这个 suite 主要验证可控模型行为下的系统集成 contract。
+- v1 evaluator 把 route mismatch 直接判为 task failure，但真实任务可能走了不同 route 仍然完成最终 artifact。
+- v1 的 `tool_calls` 混合了模型提出工具和工具真正执行，导致 permission rejection 场景下指标不清晰。
+- v1 把部分用户拒绝 confirmation 后的“无副作用安全停止”算成失败，但这类 case 的正确结果应该是 safety success。
+- `known_failure_*` 和 normal tasks 混在 overall success rate 中，使得指标既不像真实任务成功率，也不像 regression pass rate。
+
+### 解决
+
+将当前 suite 正式定义为：
+
+```text
+deterministic_integration
+```
+
+它衡量的是：
+
+```text
+给定稳定/可控模型行为时，
+Router / Runtime / Planner / Tools / Policy / Memory
+之间的系统集成和执行 contract 是否成立。
+```
+
+同时预留未来独立的：
+
+```text
+live_e2e
+```
+
+用于真实 LLM/API 下的用户任务成功率评测，但两者不混合。
+
+v1.1 的主要语义修正：
+
+- `route_correct` 成为独立诊断字段，route mismatch 不再自动导致 `task_success=false`。
+- `task_success` 只看最终 contract：状态、工具副作用、artifact、文件内容、最终回答和 permission semantics。
+- permission rejection 如果符合“用户拒绝确认 -> 不产生副作用”，计为成功的安全行为。
+- 工具指标拆分为：
+
+```text
+tool_proposals
+tool_execution_attempts
+tool_execution_successes
+tool_execution_failures
+tool_policy_rejections
+```
+
+- `tool_execution_success_rate` 只用真正执行过的工具计算：
+
+```text
+execution_successes / (execution_successes + execution_failures)
+```
+
+policy rejected 但未执行的工具不计入 execution success，也不计入 execution failure。
+
+- dataset 增加 `suite`，至少区分：
+
+```text
+normal
+regression
+```
+
+- memory cases 明确表述为 `memory_retrieval`，即预填充 memory 后验证检索和注入路径，不宣称覆盖完整 memory write + retrieval E2E。
+
+### Baseline v1.1
+
+确定性 integration baseline：
+
+```text
+overall integration pass rate = 30 / 32 = 93.8%
+normal task pass rate = 28 / 29 = 96.6%
+regression case pass rate = 2 / 3 = 66.7%
+route accuracy = 96.9%
+```
+
+工具指标：
+
+```text
+tool proposals = 44
+tool execution attempts = 40
+tool execution successes = 34
+tool execution failures = 6
+tool policy rejections = 4
+tool execution success rate = 85.0%
+```
+
+失败阶段分布：
+
+```text
+tool_execution: 2
+```
+
+代表性失败：
+
+- `agent_007`：route mismatch 本身不再直接导致失败；真正失败原因是错误 route 进入了 bad read execution chain，没有到达预期的 write permission rejection contract。
+- `agent_028`：Planner 边界 regression 仍然暴露 transform/write contract 缺失，未提出也未执行 `transform_text`。
+
+### 价值
+
+这次修正把 E2E benchmark 从“看起来有成功率”推进到“指标语义正确”。现在可以分别回答：
+
+- deterministic integration contract 是否成立；
+- normal task 和 regression case 各自表现如何；
+- route accuracy 是多少，但它是否真的影响最终任务；
+- permission rejection 是安全成功还是任务失败；
+- tool proposal、execution、policy rejection 各自发生了多少。
+
+这为后续运行真实 `live_e2e` baseline 打好了基础：live benchmark 可以复用 evaluator 和 report 语义，但不能和 deterministic integration 的分数混在一起。
+
 ## 从模块级验证转向 End-to-End Agent Evaluation
 
 - 来源：建立 `End-to-End Agent Evaluation v1`

@@ -35,7 +35,7 @@ import src.tools.file_tools as file_tools_module
 
 DATASET_PATH = Path(__file__).with_name("dataset.jsonl")
 RESULTS_ROOT = Path(__file__).with_name("results")
-DATASET_VERSION = "agent-e2e-v1"
+DATASET_VERSION = "agent-e2e-v1.1"
 
 
 class FakeSearchArguments(BaseModel):
@@ -384,6 +384,7 @@ def run_case(example: dict[str, Any], *, root_dir: Path) -> CaseOutcome:
     record["latency_ms"] = round((time.perf_counter() - start) * 1000, 2)
     evaluation = evaluate_task(example, record, workspace_dir)
     record["task_success"] = evaluation.task_success
+    record["route_correct"] = evaluation.route_correct
     record["failure_stage"] = evaluation.failure_stage
     record["failure_reasons"] = evaluation.failure_reasons
     return CaseOutcome(record=record, workspace_dir=workspace_dir)
@@ -408,8 +409,7 @@ def _execute_pipeline(
                 "final_status": "clarification",
                 "stopped_reason": "clarification",
                 "final_answer": " ".join(decision.missing_information),
-                "tool_calls": [],
-                "tool_failures": [],
+                **_tool_event_summary([]),
             }
         )
         return record
@@ -444,8 +444,7 @@ def _execute_pipeline(
                 {
                     "final_status": "planning_failed",
                     "stopped_reason": f"planning_failed:{type(exc).__name__}: {exc}",
-                    "tool_calls": [],
-                    "tool_failures": [],
+                    **_tool_event_summary([]),
                 }
             )
             return record
@@ -475,30 +474,46 @@ def _execute_pipeline(
 
 
 def _runtime_record(final_answer: str, stopped_reason: str, registry: ToolRegistry, llm: CountingFakeLLM) -> dict[str, Any]:
-    executed = list(getattr(registry, "observed_tool_calls", []))
-    tool_calls = list(dict.fromkeys([*llm.emitted_tool_calls, *executed]))
+    events = [{"tool": name, "event": "proposed"} for name in llm.emitted_tool_calls]
+    events.extend(getattr(registry, "observed_tool_events", []))
+    executed = [event["tool"] for event in events if event.get("event") == "execution_attempt"]
+    if _is_permission_rejection(stopped_reason):
+        for proposed in llm.emitted_tool_calls:
+            if proposed not in executed:
+                events.append({"tool": proposed, "event": "policy_rejected"})
     return {
         "final_status": stopped_reason,
         "stopped_reason": stopped_reason,
         "final_answer": final_answer,
-        "tool_calls": tool_calls,
-        "tool_failures": getattr(registry, "observed_tool_failures", []),
+        **_tool_event_summary(events),
         "retry_count": 0,
         "replan_count": 0,
     }
 
 
 def _plan_record(plan: Plan, final_answer: str, stopped_reason: str) -> dict[str, Any]:
+    events: list[dict[str, str]] = []
+    for step in plan.steps:
+        if step.status in (StepStatus.COMPLETED, StepStatus.FAILED):
+            events.append({"tool": step.tool_name, "event": "proposed", "step_id": step.id})
+            events.append({"tool": step.tool_name, "event": "execution_attempt", "step_id": step.id})
+            events.append(
+                {
+                    "tool": step.tool_name,
+                    "event": "execution_success" if step.status == StepStatus.COMPLETED else "execution_failure",
+                    "step_id": step.id,
+                }
+            )
+    if stopped_reason == "confirmation_required" and plan.current_step_id:
+        current = next((step for step in plan.steps if step.id == plan.current_step_id), None)
+        if current is not None:
+            events.append({"tool": current.tool_name, "event": "proposed", "step_id": current.id})
+            events.append({"tool": current.tool_name, "event": "policy_rejected", "step_id": current.id})
     return {
         "final_status": stopped_reason,
         "stopped_reason": stopped_reason,
         "final_answer": final_answer,
-        "tool_calls": [step.tool_name for step in plan.steps if step.status in (StepStatus.COMPLETED, StepStatus.FAILED)],
-        "tool_failures": [
-            {"step_id": step.id, "tool": step.tool_name, "error": step.error}
-            for step in plan.steps
-            if step.status == StepStatus.FAILED
-        ],
+        **_tool_event_summary(events),
         "retry_count": sum(step.retry_count for step in plan.steps),
         "replan_count": plan.replan_count,
     }
@@ -509,10 +524,11 @@ def _empty_record(example: dict[str, Any]) -> dict[str, Any]:
         "id": example["id"],
         "input": example["input"],
         "category": example["category"],
+        "suite": example.get("suite", "normal"),
         "expected_route": example["expected_route"],
         "actual_route": "",
-        "tool_calls": [],
-        "tool_failures": [],
+        "route_correct": False,
+        **_tool_event_summary([]),
         "retry_count": 0,
         "replan_count": 0,
         "llm_calls": 0,
@@ -542,16 +558,46 @@ def _observed_registry(registry: ToolRegistry) -> ToolRegistry:
     original_execute = registry.execute
     registry.observed_tool_calls = []  # type: ignore[attr-defined]
     registry.observed_tool_failures = []  # type: ignore[attr-defined]
+    registry.observed_tool_events = []  # type: ignore[attr-defined]
 
     def execute(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         registry.observed_tool_calls.append(name)  # type: ignore[attr-defined]
+        registry.observed_tool_events.append({"tool": name, "event": "execution_attempt"})  # type: ignore[attr-defined]
         result = original_execute(name, arguments)
         if not result.get("ok"):
             registry.observed_tool_failures.append({"tool": name, "error": result.get("error")})  # type: ignore[attr-defined]
+            registry.observed_tool_events.append({"tool": name, "event": "execution_failure"})  # type: ignore[attr-defined]
+        else:
+            registry.observed_tool_events.append({"tool": name, "event": "execution_success"})  # type: ignore[attr-defined]
         return result
 
     registry.execute = execute  # type: ignore[method-assign]
     return registry
+
+
+def _tool_event_summary(events: list[dict[str, str]]) -> dict[str, Any]:
+    proposals = [event["tool"] for event in events if event.get("event") == "proposed"]
+    attempts = [event["tool"] for event in events if event.get("event") == "execution_attempt"]
+    successes = [event["tool"] for event in events if event.get("event") == "execution_success"]
+    failures = [event for event in events if event.get("event") == "execution_failure"]
+    rejections = [event["tool"] for event in events if event.get("event") == "policy_rejected"]
+    return {
+        "tool_events": events,
+        "tool_proposals": proposals,
+        "tool_calls": proposals,
+        "tool_execution_attempts_by_name": attempts,
+        "tool_execution_successes_by_name": successes,
+        "tool_execution_failures_by_name": [event["tool"] for event in failures],
+        "tool_failures": failures,
+        "tool_execution_attempts": len(attempts),
+        "tool_execution_successes": len(successes),
+        "tool_execution_failures": len(failures),
+        "tool_policy_rejections": len(rejections),
+    }
+
+
+def _is_permission_rejection(stopped_reason: str) -> bool:
+    return "confirmation" in stopped_reason or "policy" in stopped_reason
 
 
 def _runtime_confirmation(example: dict[str, Any]):
@@ -736,12 +782,13 @@ def main() -> None:
             outcome = run_case(example, root_dir=root_dir)
             records.append(outcome.record)
             print(
-                f"  route={outcome.record['actual_route']} success={outcome.record['task_success']} "
+                f"  route={outcome.record['actual_route']} route_ok={outcome.record['route_correct']} "
+                f"success={outcome.record['task_success']} "
                 f"stage={outcome.record['failure_stage'] or '-'}",
                 flush=True,
             )
     metadata = {
-        "mode": "deterministic_e2e",
+        "mode": "deterministic_integration",
         "dataset_version": DATASET_VERSION,
         "git_commit": git_commit(),
         "llm_model": "CountingFakeLLM",
@@ -749,7 +796,7 @@ def main() -> None:
     }
     metrics = write_outputs(records, out_dir, metadata=metadata)
     print(f"Done. Report: {out_dir / 'report.md'}")
-    print(f"Overall task success: {metrics['overall_task_success_rate']:.1%}")
+    print(f"Overall integration pass rate: {metrics['overall_integration_pass_rate']:.1%}")
 
 
 if __name__ == "__main__":
