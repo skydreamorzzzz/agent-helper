@@ -890,3 +890,129 @@ LLM escalation rate 0.444
 - sentence embedding hybrid 的成本/准确率 trade-off 可以量化。
 
 当前最重要的剩余问题不是继续调 embedding threshold，而是 Router cascade policy：hard constraint 仍会抢先判定英文多步骤文件任务；embedding 的高置信错误也可能阻止 LLM 修正。这些都应该进入下一轮 Router 策略设计，而不是在本轮根据 v2 错例修规则。
+
+## Live E2E Baseline：真实模型端到端基线
+
+- 来源：Live E2E Baseline
+- 相关模块：`evals/agent/live_dataset.jsonl`、`evals/agent/live_runner.py`、`evals/agent/report.py`
+- 结论类型：真实模型 baseline，而不是优化分数
+
+### 背景
+
+项目已经完成了 Runtime、Router 实验、Embedding / Hybrid Routing、Router Holdout、Deterministic E2E Evaluation 和 E2E Evaluation Semantics Refinement。
+
+上一阶段的关键修正是把：
+
+```text
+deterministic integration regression
+```
+
+和：
+
+```text
+real agent task success
+```
+
+明确分开。`CountingFakeLLM` 能稳定验证 Router / Runtime / Planner / Tools / Policy / Memory 的集成 contract，但不能代表真实模型质量。
+
+因此本轮新增 `live_e2e`，让评测真正调用当前配置的 LLM，同时继续保持 Runtime、Router、Planner、Tool Policy、Memory 的业务行为不变。
+
+### 实现
+
+新增独立 live dataset：
+
+```text
+evals/agent/live_dataset.jsonl
+```
+
+覆盖：
+
+- direct answer
+- single tool calculator
+- single tool file read
+- planned read / transform / write
+- planned calculate / write
+- clarification
+- write confirmation rejected
+- overwrite confirmation rejected
+- memory retrieval
+- invalid / boundary regression
+
+新增 runner：
+
+```text
+evals/agent/live_runner.py
+```
+
+它复用当前 CLI 的真实构造方式：
+
+- `RequestRouter`
+- `AgentRuntime`
+- `StructuredPlanner`
+- `PlanExecutor`
+- `ToolRegistry`
+- `ToolExecutionPolicy`
+- `MemoryService`
+- `.env` 中的 `LocalLLMClient` 配置
+
+评测侧只增加 instrumentation：
+
+- `CountingLLMClient` 统计 LLM calls；
+- 每个 case 使用临时 workspace；
+- confirmation 由 dataset 的 `confirmation` 字段控制；
+- Runtime 日志解析 tool proposal / execution / policy rejection；
+- Plan 执行结果记录 retry / replan / step status；
+- failure stage 归因到 `router`、`planner`、`tool_execution`、`policy`、`memory`、`runtime`、`final_answer` 或 `unknown`。
+
+### 结果
+
+最终 live baseline：
+
+```text
+result artifact: evals/agent/results/live_20260811_230109/
+dataset version: agent-live-e2e-v1
+model: deepseek-v4-flash
+provider: https://api.deepseek.com
+overall live pass rate: 9/10 = 90.0%
+normal task pass rate: 9/9 = 100.0%
+regression case pass rate: 0/1 = 0.0%
+route accuracy: 10/10 = 100.0%
+average latency: 7384.3 ms
+average LLM calls: 2.10
+tool proposals: 9
+tool execution attempts: 7
+tool execution successes: 7
+tool execution failures: 0
+tool policy rejections: 2
+retry count: 0
+replan count: 0
+```
+
+失败分布：
+
+```text
+runtime: 1
+```
+
+唯一失败：
+
+```text
+live_010
+category: failure_boundary_invalid_tool_args
+route: single_tool
+stage: runtime
+```
+
+Router 正确选择 `single_tool`，但普通 `single_tool` 路径并没有像 `web_lookup` 一样向 Runtime 传入 `required_tool`。真实模型直接做了安全拒绝，没有调用 `calculator`，因此没有触发 calculator 的非法表达式校验错误。用户可见行为是安全的，但不满足当前 regression contract。
+
+第一次 live run 还观察到一次未复现的 `llm_call_failed`：文件读取工具已成功执行，但后续模型回答阶段失败。这说明 live E2E 必须继续把 provider/runtime availability failure 和 deterministic integration failure 分开看。
+
+### 结论
+
+这轮没有暴露出正常任务中的 Router、Planner、Tool、Policy 或 Memory 失败。当前最有价值的下一步不是继续调 Router threshold，也不是优化 embedding prototype，而是明确 Runtime 对 routed tool tasks 的 contract：
+
+```text
+single_tool 是否应该像 web_lookup 一样强制 required_tool？
+```
+
+同时 live dataset 还太小，下一阶段应该先扩展真实任务覆盖面，再根据 failure-stage distribution 决定是否优化 Runtime、Planner、Policy 或 Router。

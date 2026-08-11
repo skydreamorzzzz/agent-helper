@@ -116,18 +116,31 @@ def write_outputs(records: list[dict[str, Any]], out_dir: Path, *, metadata: dic
 
 def render_markdown(metrics: dict[str, Any]) -> str:
     metadata = metrics.get("metadata") or {}
+    mode = str(metadata.get("mode") or "unknown")
+    if mode == "live_e2e":
+        scope_note = (
+            "> This live E2E benchmark calls the configured LLM/API and runs the current Agent stack. "
+            "Results are provider/model/config dependent and should be read as a point-in-time baseline, "
+            "not a deterministic regression score."
+        )
+    else:
+        scope_note = (
+            "> This deterministic integration benchmark uses a fake model and fake web search. "
+            "It measures system integration contracts, not live LLM agent quality or real user task success."
+        )
     lines = [
         "# End-to-End Agent Evaluation Report",
         "",
         f"- Date: {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"- Mode: {metadata.get('mode', 'unknown')}",
+        f"- Mode: {mode}",
         f"- Dataset version: {metadata.get('dataset_version', 'unknown')}",
         f"- Git commit: {metadata.get('git_commit', 'unknown')}",
         f"- LLM model: {metadata.get('llm_model', 'unknown')}",
+        f"- LLM provider/base URL: {metadata.get('llm_provider', metadata.get('llm_base_url', 'unknown'))}",
         f"- Router configuration: {metadata.get('router_configuration', 'current RequestRouter; router tuning frozen')}",
+        f"- Key config: {metadata.get('key_config', 'unknown')}",
         "",
-        "> This deterministic integration benchmark uses a fake model and fake web search. "
-        "It measures system integration contracts, not live LLM agent quality or real user task success.",
+        scope_note,
         "",
         "## Summary",
         "",
