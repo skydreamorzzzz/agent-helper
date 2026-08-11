@@ -11,3 +11,4 @@ workspace/*
 evals/data/
 evals/results/
 evals/router/results/
+evals/agent/results/

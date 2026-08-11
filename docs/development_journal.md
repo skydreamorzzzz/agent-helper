@@ -1,5 +1,130 @@
 # 开发复盘记录
 
+## 从模块级验证转向 End-to-End Agent Evaluation
+
+- 来源：建立 `End-to-End Agent Evaluation v1`
+- 相关模块：`RequestRouter`、`AgentRuntime`、`StructuredPlanner`、`PlanExecutor`、`ToolRegistry`、`ToolExecutionPolicy`、`MemoryService`、`evals/agent`
+- 结论类型：评测体系阶段演进
+
+### 背景
+
+此前项目已经分别建立了 Router benchmark、Tool Policy 测试、Planner 测试、Runtime 测试、Memory 测试等模块级验证。这些测试能回答“单个模块是否符合预期”，也记录了 Router 从规则、LLM 到 embedding / hybrid cascade 的工程演进。
+
+但模块级指标无法回答最终问题：
+
+```text
+整个 Agent 能否成功完成真实用户任务？
+```
+
+一个真实任务会穿过完整链路：
+
+```text
+用户请求 -> Router -> Runtime / Planner -> Tools -> Policy / Confirmation -> Final Answer
+```
+
+任何一个环节失败，用户看到的都是任务失败。因此本阶段冻结 Router threshold、prototype 和 router-v2 的继续微调，把优化目标从局部路由指标转向端到端 task success rate 和 failure-stage attribution。
+
+### 解决
+
+新增 `evals/agent/`：
+
+```text
+evals/agent/
+  dataset.jsonl
+  runner.py
+  evaluators.py
+  report.py
+  baselines/v1.md
+```
+
+第一版 dataset 包含 32 条确定性任务，覆盖：
+
+```text
+direct_answer
+single_tool
+web_lookup
+planned_task
+deep_research
+clarification
+memory-related task
+tool permission / confirmation
+failure / invalid input
+recovery
+```
+
+评测优先使用程序化验证，不使用 LLM-as-a-Judge：
+
+- calculator 检查最终数值。
+- read/write 检查文件是否存在和内容片段。
+- planned task 检查最终 artifact。
+- web_lookup 检查 `search_web` 是否被实际调用。
+- permission rejection 检查副作用没有发生。
+- invalid input 检查系统安全停止或返回工具错误，而不是崩溃。
+
+deterministic runner 使用 fake LLM、fake web search 和 per-case 临时 workspace，让关键链路可以在本地和 CI 中稳定重放；live evaluation 预留为后续独立模式，不和 deterministic baseline 混合。
+
+每条 case 记录：
+
+```text
+expected_route / actual_route
+tool_calls / tool_failures
+retry_count / replan_count
+llm_calls
+final_status / stopped_reason
+task_success
+failure_stage
+latency_ms
+```
+
+`failure_stage` 用于把失败归因到：
+
+```text
+routing
+planning
+argument_resolution
+tool_execution
+permission
+recovery
+final_answer
+memory
+runner
+```
+
+### Baseline v1
+
+确定性 E2E baseline：
+
+```text
+overall task success = 28 / 32 = 87.5%
+route accuracy = 96.9%
+tool execution success rate = 85.0%
+average tool calls = 1.25
+average LLM calls = 2.59
+total retry count = 3
+total replan count = 0
+```
+
+失败阶段分布：
+
+```text
+tool_execution: 2
+permission: 1
+routing: 1
+```
+
+代表性失败：
+
+- `agent_007`：写文件请求被路由为 `planned_task`，而不是单工具写入路径。
+- `agent_028`：Planner 边界压力用例完成了写入，但没有经过 `transform_text`，暴露 transform/write 链的 artifact 验证价值。
+- `agent_029`：required `search_web` 在空搜索结果下无法满足，Runtime 安全停止为 `required_tool_missing`。
+- `agent_030`：权限拒绝导致预期 artifact 不存在，记录为 permission 阶段失败。
+
+### 价值
+
+这次演进把项目评测目标从“每个模块看起来能工作”推进到“真实任务是否完成”。端到端评测不只给出 success rate，还能告诉下一阶段最值得修哪里。
+
+本轮遵守实验纪律：发现 Router、Planner、Tool、Policy、Recovery、Final Answer 的失败只记录，不立即修复。下一阶段应基于 failure-stage distribution 选择投入最高的模块，而不是继续为了局部指标微调 Router。
+
 ## 真实 DeepSeek 全链路测试暴露的 Planner 职责边界问题
 
 - 来源：真实 DeepSeek 全链路测试
