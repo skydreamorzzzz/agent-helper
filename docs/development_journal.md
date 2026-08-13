@@ -1168,3 +1168,143 @@ routing: 1
 4. Memory routing boundary：带有显式“根据记忆回答”的请求为什么会落到 clarification。
 
 这些都应该在下一轮作为优化候选，而不是本轮为了提高 live score 立即修改 Agent 行为。
+
+## Evaluation Semantics Finalization：task success 与 execution contract 分离
+
+- 来源：Evaluation Semantics Finalization
+- 相关模块：`evals/agent/evaluators.py`、`evals/agent/semantics.py`、`evals/agent/report.py`、`evals/agent/live_dataset.jsonl`
+- 结论类型：评测语义最终收敛，不优化 Agent 行为
+
+### 问题
+
+上一轮 live dataset expansion 后，部分 failure 并不一定代表真实用户任务失败。例如：
+
+- `live_011` 中模型直接回答 `4`，用户任务完成，但因为没有调用 `calculator` 被算作 task failure。
+- `live_023` 要求短中文摘要文件里必须包含英文 `evaluation`，这是 benchmark contract 过硬。
+- `live_024` 要求 artifact 精确包含小写 `alpha` / `beta`，但真实输出可能转成 `Alpha` / `Beta` 或中文说明。
+- `live_035` 用户只说“生成报告”，没有指定文件名；旧 contract 强制 `reports/agent_memory.md`，与真实 Planner 自选文件名冲突。
+
+这些都说明：工具路径、固定 artifact 命名、字面内容检查属于 execution/integration contract，不应直接等价为用户任务失败。
+
+### 语义修正
+
+本轮把评测结果拆成三层：
+
+```text
+task_success
+execution_contract_pass
+route_correct
+```
+
+规则：
+
+- `task_success` 只看用户可见任务 contract：最终状态、artifact、side effect、安全拒绝、最终回答内容。
+- `execution_contract_pass` 只看预期执行链：tool proposal、planned step、actual execution、retry/replan 等。
+- `route_correct` 继续作为诊断字段，不自动决定 task success。
+- tool path mismatch 不再自动导致 task failure。
+
+Deterministic integration 仍然保留 contract 测试价值：报告中的 `integration_pass_rate` 要求 `task_success && execution_contract_pass`。
+
+Live E2E 报告则首先展示：
+
+```text
+Overall task success rate
+Execution contract pass rate
+Route accuracy
+```
+
+这样 live benchmark 不会把“模型没走预期工具链但用户任务完成”误判成 Agent failure。
+
+### 统一 failure attribution
+
+`live_runner` 不再维护额外一套 failure-stage 覆盖逻辑。失败归因统一收敛到 `evals/agent/semantics.py`：
+
+```text
+routing
+planning
+plan_validation
+argument_resolution
+tool_execution
+permission
+memory
+recovery
+final_answer
+runtime
+unknown
+```
+
+同一套 `infer_failure_stage()` 同时服务 deterministic 和 live evaluation。live runner 只记录轨迹，不再二次改写优先级。
+
+### 可复现性
+
+runner metadata 增加：
+
+```text
+git_commit
+git_dirty
+dataset_fingerprint
+dataset_version
+```
+
+最终 clean-tree live baseline 在提交 `8751f01` 上运行：
+
+```text
+git_commit: 8751f01
+git_dirty: false
+dataset_version: agent-live-e2e-v1.1
+dataset_fingerprint: sha256:bcd31245b2e8b57f
+result artifact: evals/agent/results/live_20260813_224619/
+```
+
+### Clean-tree Live E2E baseline
+
+```text
+overall task success rate: 32/35 = 91.4%
+execution contract pass rate: 32/35 = 91.4%
+integration pass rate: 29/35 = 82.9%
+normal task success rate: 28/30 = 93.3%
+regression task success rate: 4/5 = 80.0%
+route accuracy: 33/35 = 94.3%
+average latency: 10366.9 ms
+average LLM calls: 2.49
+tool proposals: 49
+model/runtime tool proposals: 17
+planned tool steps: 32
+tool execution attempts: 45
+tool execution successes: 40
+tool execution failures: 5
+tool policy rejections: 4
+retry count: 2
+replan count: 0
+```
+
+Task failure distribution:
+
+```text
+tool_execution: 2
+memory: 1
+```
+
+Execution contract failure distribution:
+
+```text
+runtime: 2
+permission: 1
+```
+
+### 真实失败
+
+- `live_026`：invalid write path boundary 没有失败，说明 Planner / tool argument / workspace path contract 仍需审查。
+- `live_030`：显式“根据记忆回答”的请求被路由到 clarification，说明 memory retrieval 与 routing boundary 存在问题。
+- `live_032`：existing file write 发生覆盖，说明 write overwrite argument discipline 仍是风险点。
+
+### 下一轮方向
+
+不要从 Router threshold 或 embedding prototype 开始。当前最值得优化的是：
+
+1. Runtime/tool contract：`single_tool` 是否要有 required-tool 语义。
+2. 文件写入与 overwrite 参数纪律。
+3. Memory routing boundary。
+4. Planner/path validation boundary。
+
+这些方向来自 task failure 与 execution contract failure 的分离后数据，而不是为了让 benchmark 分数更好看。

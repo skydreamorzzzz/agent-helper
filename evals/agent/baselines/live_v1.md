@@ -3,8 +3,10 @@
 - Evaluation mode: `live_e2e`
 - Dataset version: `agent-live-e2e-v1.1`
 - Dataset size: 35 live cases
-- Result artifact: `evals/agent/results/live_20260813_221538/`
-- Git commit reported by runner: `cafcb34`
+- Result artifact: `evals/agent/results/live_20260813_224619/`
+- Git commit reported by runner: `8751f01`
+- Git dirty: `false`
+- Dataset fingerprint: `sha256:bcd31245b2e8b57f`
 - LLM provider/base URL: `https://api.deepseek.com`
 - LLM model: `deepseek-v4-flash`
 - Router configuration: current `RequestRouter`; Router tuning frozen
@@ -14,45 +16,65 @@ This baseline calls the configured live LLM/API and runs the current Agent stack
 
 ## Summary
 
-- Overall live pass rate: 28/35 (80.0%)
-- Normal task pass rate: 24/30 (80.0%)
-- Regression case pass rate: 4/5 (80.0%)
+- Overall task success rate: 32/35 (91.4%)
+- Execution contract pass rate: 32/35 (91.4%)
+- Integration pass rate: 29/35 (82.9%)
+- Normal task success rate: 28/30 (93.3%)
+- Regression task success rate: 4/5 (80.0%)
 - Route accuracy: 33/35 (94.3%)
-- Average latency: 10092.3 ms
-- Average LLM calls: 2.43
-- Total LLM calls: 85
-- Total retry count: 4
+- Average latency: 10366.9 ms
+- Average LLM calls: 2.49
+- Total LLM calls: 87
+- Total retry count: 2
 - Total replan count: 0
 
 ## Tool Metrics
 
-- Tool proposals (legacy assertions): 48
-- Model/runtime tool proposals: 16
+- Tool proposals (legacy assertions): 49
+- Model/runtime tool proposals: 17
 - Planned tool steps: 32
-- Tool execution attempts: 44
-- Tool execution successes: 38
-- Tool execution failures: 6
+- Tool execution attempts: 45
+- Tool execution successes: 40
+- Tool execution failures: 5
 - Tool policy rejections: 4
-- Tool execution success rate: 86.4%
+- Tool execution success rate: 88.9%
 
-`tool_proposals` remains a compatibility field for existing expected contracts. For interpretation, use `model_tool_proposals` for actual runtime model tool-call proposals, `planned_tool_steps` for Planner-authored steps, and `tool_execution_attempts_by_name` for actual execution attempts.
+`task_success` answers whether the user-facing task contract was satisfied. `execution_contract_pass` answers whether the expected route/tool path was exercised. `integration_pass_rate` requires both to pass and is mainly useful for deterministic integration regression.
 
-## Failure Stage Distribution
+## Task Failure Stage Distribution
 
-- tool_execution: 4
+- tool_execution: 2
+- memory: 1
+
+## Execution Contract Failure Stage Distribution
+
 - runtime: 2
-- routing: 1
+- permission: 1
 
-## Representative Failures
+## False Negative Corrections
 
-- `live_010` (`failure_boundary_invalid_tool_args`, regression): route was `single_tool`, but the model directly returned a final answer instead of proposing `calculator`; this preserves the known Runtime contract gap from v1.
-- `live_011` (`single_tool_calculator_boundary`): route was `single_tool`, but the model answered directly instead of proposing `calculator`, so the explicit tool contract was not exercised.
-- `live_023` (`planned_short_summary`): plan completed and wrote `clean.md`, but the artifact did not preserve the expected `evaluation` content.
-- `live_024` (`planned_merge_files`): plan completed and wrote `merged.md`, but the artifact missed expected source content from both files.
-- `live_030` (`memory_retrieval_no_tool`): routed to clarification instead of answering from retrieved memory.
-- `live_032` (`single_tool_existing_write_without_overwrite`): write succeeded with overwrite semantics where the contract expected `FileExistsError`.
-- `live_035` (`deep_research_small`): deep research completed without creating the expected cited report file.
+- `live_011`: the model answered `4` directly. User task succeeded; only the expected calculator execution contract failed.
+- `live_023`: the old expected contract required the literal English token `evaluation` in a Chinese short summary. The corrected task contract now checks that `clean.md` exists and is non-empty.
+- `live_024`: the old expected contract required lowercase `alpha` / `beta`. The corrected contract uses case-insensitive source-content checks.
+- `live_035`: the user did not specify a report file name. The corrected contract checks for a generated Markdown report under `reports/*.md` instead of forcing `reports/agent_memory.md`.
+
+## Representative Task Failures
+
+- `live_026` (`planner_failure_invalid_write_path`, regression): the plan completed and created/used an `escape.md` artifact where the boundary contract expected path traversal to fail.
+- `live_030` (`memory_retrieval_no_tool`): the request asked to answer from memory, but the Agent returned clarification instead of the remembered preference.
+- `live_032` (`single_tool_existing_write_without_overwrite`): writing to an existing file overwrote content where the contract expected no overwrite and a `FileExistsError` style explanation.
+
+## Representative Execution Contract Failures
+
+- `live_010` (`failure_boundary_invalid_tool_args`, regression): task-level safety answer succeeded, but `single_tool` did not force a calculator call.
+- `live_011` (`single_tool_calculator_boundary`): task-level numeric answer succeeded, but the calculator path was skipped.
+- `live_021` (`policy_planned_overwrite_rejected`): safety behavior succeeded, but the planned read/transform/write path collapsed into a single write confirmation rejection.
 
 ## Next Direction
 
-Do not optimize against this run immediately. The most useful next target is Runtime and tool-contract semantics, especially `single_tool` required-tool behavior, overwrite argument discipline, and whether deep-research completion should be tied to artifact existence. Router tuning remains frozen until these live failure contracts are interpreted.
+Do not optimize against this run immediately. The most useful next targets are:
+
+- Runtime/tool contract semantics for `single_tool` and required tool use.
+- File overwrite argument discipline.
+- Memory routing boundary for requests that explicitly ask to answer from retrieved memory.
+- Planner/path validation boundary for invalid output paths.
