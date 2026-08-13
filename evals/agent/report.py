@@ -7,12 +7,16 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from evals.agent.semantics import canonical_failure_stage
+
 
 def compute_metrics(records: list[dict[str, Any]], *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     total = len(records)
     passed = sum(1 for record in records if record.get("task_success"))
     route_correct = sum(1 for record in records if record.get("route_correct"))
     tool_proposals = sum(len(record.get("tool_proposals") or []) for record in records)
+    model_tool_proposals = sum(len(record.get("model_tool_proposals") or []) for record in records)
+    planned_tool_steps = sum(len(record.get("planned_tool_steps") or []) for record in records)
     tool_execution_attempts = sum(int(record.get("tool_execution_attempts") or 0) for record in records)
     tool_execution_successes = sum(int(record.get("tool_execution_successes") or 0) for record in records)
     tool_execution_failures = sum(int(record.get("tool_execution_failures") or 0) for record in records)
@@ -49,7 +53,9 @@ def compute_metrics(records: list[dict[str, Any]], *, metadata: dict[str, Any] |
         }
 
     failure_stage_distribution = Counter(
-        str(record.get("failure_stage") or "none") for record in records if not record.get("task_success")
+        canonical_failure_stage(str(record.get("failure_stage") or "")) or "none"
+        for record in records
+        if not record.get("task_success")
     )
 
     return {
@@ -67,11 +73,15 @@ def compute_metrics(records: list[dict[str, Any]], *, metadata: dict[str, Any] |
             else 1.0
         ),
         "average_tool_proposals": tool_proposals / total if total else 0.0,
+        "average_model_tool_proposals": model_tool_proposals / total if total else 0.0,
+        "average_planned_tool_steps": planned_tool_steps / total if total else 0.0,
         "average_tool_calls": tool_proposals / total if total else 0.0,
         "average_llm_calls": llm_calls / total if total else 0.0,
         "retry_rate": retry_count / total if total else 0.0,
         "replan_rate": replan_count / total if total else 0.0,
         "tool_proposals": tool_proposals,
+        "model_tool_proposals": model_tool_proposals,
+        "planned_tool_steps": planned_tool_steps,
         "tool_execution_attempts": tool_execution_attempts,
         "tool_execution_successes": tool_execution_successes,
         "tool_execution_failures": tool_execution_failures,
@@ -148,7 +158,9 @@ def render_markdown(metrics: dict[str, Any]) -> str:
         f"- Normal task pass rate: {metrics['normal_task_success_rate']:.1%}",
         f"- Regression case pass rate: {metrics['regression_case_pass_rate']:.1%}",
         f"- Route accuracy: {metrics['route_accuracy']:.1%}",
-        f"- Tool proposals: {metrics['tool_proposals']}",
+        f"- Tool proposals (legacy assertions): {metrics['tool_proposals']}",
+        f"- Model/runtime tool proposals: {metrics['model_tool_proposals']}",
+        f"- Planned tool steps: {metrics['planned_tool_steps']}",
         f"- Tool execution attempts: {metrics['tool_execution_attempts']}",
         f"- Tool execution successes: {metrics['tool_execution_successes']}",
         f"- Tool execution failures: {metrics['tool_execution_failures']}",

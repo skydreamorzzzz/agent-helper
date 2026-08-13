@@ -4,18 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
-FAILURE_STAGES = {
-    "routing",
-    "planning",
-    "argument_resolution",
-    "tool_execution",
-    "permission",
-    "recovery",
-    "final_answer",
-    "memory",
-    "runner",
-}
+from evals.agent.semantics import FAILURE_STAGES, canonical_failure_stage, stage_for_status
 
 
 @dataclass
@@ -95,7 +84,12 @@ def evaluate_task(example: dict[str, Any], record: dict[str, Any], workspace_dir
             reasons.append(f"final answer missing content: {needle}")
 
     if reasons:
-        return EvaluationResult(False, route_correct, _infer_failure_stage(example, record, reasons), reasons)
+        return EvaluationResult(
+            False,
+            route_correct,
+            canonical_failure_stage(_infer_failure_stage(example, record, reasons)),
+            reasons,
+        )
     return EvaluationResult(True, route_correct)
 
 
@@ -107,29 +101,16 @@ def _resolve_in(root: Path, relative_path: str) -> Path:
     return candidate
 
 
-def _stage_for_status(record: dict[str, Any]) -> str:
-    stopped_reason = str(record.get("stopped_reason") or "")
-    final_status = str(record.get("final_status") or "")
-    if "confirmation" in stopped_reason or "confirmation" in final_status:
-        return "permission"
-    if "plan" in stopped_reason or "validation" in stopped_reason:
-        return "planning"
-    if "invalid_json" in stopped_reason:
-        return "recovery"
-    if record.get("tool_execution_failures"):
-        return "tool_execution"
-    if stopped_reason.startswith("runner_error"):
-        return "runner"
-    return "final_answer"
-
-
 def _infer_failure_stage(example: dict[str, Any], record: dict[str, Any], reasons: list[str]) -> str:
     category = str(example.get("category") or "")
+    route_mismatch = record.get("actual_route") != str(example.get("expected_route") or "")
     if "memory" in category:
         return "memory"
-    if any("route mismatch" in reason for reason in reasons):
+    if any("route mismatch" in reason for reason in reasons) or route_mismatch:
         return "routing"
     if any("tool proposal" in reason or "tool execution" in reason for reason in reasons):
+        if str(record.get("actual_route") or "") in ("planned_task", "deep_research"):
+            return "planning"
         return "tool_execution"
     if any("file" in reason for reason in reasons):
         if "confirmation" in str(record.get("stopped_reason") or ""):
@@ -137,4 +118,4 @@ def _infer_failure_stage(example: dict[str, Any], record: dict[str, Any], reason
         return "tool_execution"
     if record.get("tool_execution_failures"):
         return "tool_execution"
-    return _stage_for_status(record)
+    return stage_for_status(record)

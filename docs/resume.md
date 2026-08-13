@@ -30,16 +30,16 @@ Deterministic E2E v1.1:
 - Regression case pass rate: 2/3 (66.7%)
 - Route accuracy: 31/32 (96.9%)
 
-Live E2E v1:
+Live E2E v1.1:
 
 - Mode: `live_e2e`
-- Dataset: 10 cases
+- Dataset: 35 cases
 - Model: `deepseek-v4-flash`
-- Overall live pass rate: 9/10 (90.0%)
-- Normal task pass rate: 9/9 (100.0%)
-- Regression case pass rate: 0/1 (0.0%)
-- Route accuracy: 10/10 (100.0%)
-- Main failure stage: `runtime`
+- Overall live pass rate: 28/35 (80.0%)
+- Normal task pass rate: 24/30 (80.0%)
+- Regression case pass rate: 4/5 (80.0%)
+- Route accuracy: 33/35 (94.3%)
+- Failure stages: `tool_execution` 4, `runtime` 2, `routing` 1
 
 ## Engineering Value
 
@@ -53,7 +53,7 @@ The project demonstrates a progression from feature implementation to measuremen
 
 ## Current Limitations
 
-- Live E2E dataset is intentionally small and should be expanded before drawing broad quality conclusions.
+- Live E2E dataset is broader but still model/provider dependent; repeated runs can shift individual case outcomes.
 - `single_tool` routing does not currently enforce a required tool call in Runtime.
 - Deep research depends on Tavily availability and has not yet been heavily covered in live E2E.
 - Memory E2E mainly validates retrieval path; richer write/retrieve lifecycle remains future work.

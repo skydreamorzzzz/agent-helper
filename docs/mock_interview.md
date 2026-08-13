@@ -67,27 +67,27 @@ Deterministic E2E v1.1:
 - normal task pass rate `96.6%`
 - regression pass rate `66.7%`
 
-Live E2E v1:
+Live E2E v1.1:
 
-- 10 cases
-- 9 passed
-- normal task pass rate `100.0%`
-- regression pass rate `0.0%`
-- route accuracy `100.0%`
-- main failure stage `runtime`
+- 35 cases
+- 28 passed
+- normal task pass rate `80.0%`
+- regression pass rate `80.0%`
+- route accuracy `94.3%`
+- failure stages: `tool_execution` 4, `runtime` 2, `routing` 1
 
 ## Q: Where does the live Agent currently fail?
 
-The final live baseline found one regression failure: a malicious calculator request was routed as `single_tool`, but Runtime did not enforce the calculator call. The model directly refused safely. That is acceptable user safety behavior, but it did not satisfy the regression contract that expected tool-level invalid-argument handling.
+The expanded live baseline found seven failures. They include the known `single_tool` required-tool gap, another calculator boundary direct-answer case, two planned-artifact content misses, an overwrite semantics failure, a memory request routed to clarification, and a deep-research artifact miss.
 
-This points to a Runtime semantics question: should `single_tool` behave like `web_lookup` and require the selected tool before final answer?
+This points first to Runtime/tool-contract semantics, then to Planner artifact guarantees and selected Router boundaries. It is still measurement evidence, not a reason to tune thresholds immediately.
 
 ## Q: What would you improve next?
 
 I would not tune Router thresholds next. The live failure distribution points to Runtime contract semantics:
 
 - define whether `single_tool` requires tool execution;
-- expand live E2E with more boundary cases before optimizing;
+- use the expanded live E2E failure distribution before optimizing;
 - separate safe refusal success from tool-validation success in the dataset;
 - add more live deep-research and provider-failure cases.
 

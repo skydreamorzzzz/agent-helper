@@ -28,6 +28,7 @@ from src.tools.registry import ToolRegistry
 
 from evals.agent.evaluators import evaluate_task
 from evals.agent.report import git_commit, write_outputs
+from evals.agent.semantics import tool_event_summary
 
 import src.planner.executor as executor_module
 import src.tools.file_tools as file_tools_module
@@ -474,13 +475,13 @@ def _execute_pipeline(
 
 
 def _runtime_record(final_answer: str, stopped_reason: str, registry: ToolRegistry, llm: CountingFakeLLM) -> dict[str, Any]:
-    events = [{"tool": name, "event": "proposed"} for name in llm.emitted_tool_calls]
+    events = [{"tool": name, "event": "model_tool_proposed", "source": "model"} for name in llm.emitted_tool_calls]
     events.extend(getattr(registry, "observed_tool_events", []))
     executed = [event["tool"] for event in events if event.get("event") == "execution_attempt"]
     if _is_permission_rejection(stopped_reason):
         for proposed in llm.emitted_tool_calls:
             if proposed not in executed:
-                events.append({"tool": proposed, "event": "policy_rejected"})
+                events.append({"tool": proposed, "event": "policy_rejected", "source": "runtime_policy"})
     return {
         "final_status": stopped_reason,
         "stopped_reason": stopped_reason,
@@ -492,10 +493,10 @@ def _runtime_record(final_answer: str, stopped_reason: str, registry: ToolRegist
 
 
 def _plan_record(plan: Plan, final_answer: str, stopped_reason: str) -> dict[str, Any]:
-    events: list[dict[str, str]] = []
+    events: list[dict[str, Any]] = []
     for step in plan.steps:
         if step.status in (StepStatus.COMPLETED, StepStatus.FAILED):
-            events.append({"tool": step.tool_name, "event": "proposed", "step_id": step.id})
+            events.append({"tool": step.tool_name, "event": "planned_tool_step", "source": "plan", "step_id": step.id})
             events.append({"tool": step.tool_name, "event": "execution_attempt", "step_id": step.id})
             events.append(
                 {
@@ -507,8 +508,8 @@ def _plan_record(plan: Plan, final_answer: str, stopped_reason: str) -> dict[str
     if stopped_reason == "confirmation_required" and plan.current_step_id:
         current = next((step for step in plan.steps if step.id == plan.current_step_id), None)
         if current is not None:
-            events.append({"tool": current.tool_name, "event": "proposed", "step_id": current.id})
-            events.append({"tool": current.tool_name, "event": "policy_rejected", "step_id": current.id})
+            events.append({"tool": current.tool_name, "event": "planned_tool_step", "source": "plan", "step_id": current.id})
+            events.append({"tool": current.tool_name, "event": "policy_rejected", "source": "plan_policy", "step_id": current.id})
     return {
         "final_status": stopped_reason,
         "stopped_reason": stopped_reason,
@@ -575,25 +576,8 @@ def _observed_registry(registry: ToolRegistry) -> ToolRegistry:
     return registry
 
 
-def _tool_event_summary(events: list[dict[str, str]]) -> dict[str, Any]:
-    proposals = [event["tool"] for event in events if event.get("event") == "proposed"]
-    attempts = [event["tool"] for event in events if event.get("event") == "execution_attempt"]
-    successes = [event["tool"] for event in events if event.get("event") == "execution_success"]
-    failures = [event for event in events if event.get("event") == "execution_failure"]
-    rejections = [event["tool"] for event in events if event.get("event") == "policy_rejected"]
-    return {
-        "tool_events": events,
-        "tool_proposals": proposals,
-        "tool_calls": proposals,
-        "tool_execution_attempts_by_name": attempts,
-        "tool_execution_successes_by_name": successes,
-        "tool_execution_failures_by_name": [event["tool"] for event in failures],
-        "tool_failures": failures,
-        "tool_execution_attempts": len(attempts),
-        "tool_execution_successes": len(successes),
-        "tool_execution_failures": len(failures),
-        "tool_policy_rejections": len(rejections),
-    }
+def _tool_event_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    return tool_event_summary(events)
 
 
 def _is_permission_rejection(stopped_reason: str) -> bool:

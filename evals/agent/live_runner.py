@@ -27,6 +27,7 @@ from src.tools.registry import ToolRegistry
 
 from evals.agent.evaluators import evaluate_task
 from evals.agent.report import git_commit, write_outputs
+from evals.agent.semantics import canonical_failure_stage, tool_event_summary
 
 import src.planner.executor as executor_module
 import src.tools.file_tools as file_tools_module
@@ -34,7 +35,7 @@ import src.tools.file_tools as file_tools_module
 
 DATASET_PATH = Path(__file__).with_name("live_dataset.jsonl")
 RESULTS_ROOT = Path(__file__).with_name("results")
-DATASET_VERSION = "agent-live-e2e-v1"
+DATASET_VERSION = "agent-live-e2e-v1.1"
 
 
 @dataclass
@@ -249,7 +250,7 @@ def _plan_record(plan: Plan, final_answer: str, stopped_reason: str, registry_ev
     events: list[dict[str, Any]] = []
     for step in plan.steps:
         if step.status in (StepStatus.COMPLETED, StepStatus.FAILED):
-            events.append({"tool": step.tool_name, "event": "proposed", "step_id": step.id})
+            events.append({"tool": step.tool_name, "event": "planned_tool_step", "source": "plan", "step_id": step.id})
             events.append({"tool": step.tool_name, "event": "execution_attempt", "step_id": step.id})
             events.append(
                 {
@@ -261,8 +262,8 @@ def _plan_record(plan: Plan, final_answer: str, stopped_reason: str, registry_ev
     if stopped_reason == "confirmation_required" and plan.current_step_id:
         current = next((step for step in plan.steps if step.id == plan.current_step_id), None)
         if current is not None:
-            events.append({"tool": current.tool_name, "event": "proposed", "step_id": current.id})
-            events.append({"tool": current.tool_name, "event": "policy_rejected", "step_id": current.id})
+            events.append({"tool": current.tool_name, "event": "planned_tool_step", "source": "plan", "step_id": current.id})
+            events.append({"tool": current.tool_name, "event": "policy_rejected", "source": "plan_policy", "step_id": current.id})
     registry_keys = {(event.get("tool"), event.get("event")) for event in registry_events}
     existing_keys = {(event.get("tool"), event.get("event")) for event in events}
     events.extend(event for event in registry_events if (event.get("tool"), event.get("event")) not in existing_keys and (event.get("tool"), event.get("event")) in registry_keys)
@@ -291,14 +292,14 @@ def _events_from_log(path: Path) -> list[dict[str, Any]]:
         event_name = payload.get("event")
         tool = payload.get("tool")
         if event_name == "tool_call" and tool:
-            events.append({"tool": tool, "event": "proposed"})
+            events.append({"tool": tool, "event": "model_tool_proposed", "source": "model"})
         elif event_name == "tool_result" and tool:
             result = payload.get("result") or {}
             if result.get("ok"):
                 events.append({"tool": tool, "event": "execution_attempt"})
                 events.append({"tool": tool, "event": "execution_success"})
             elif "requires confirmation" in str(result.get("error") or "") or "denied" in str(result.get("error") or ""):
-                events.append({"tool": tool, "event": "policy_rejected"})
+                events.append({"tool": tool, "event": "policy_rejected", "source": "runtime_policy"})
             else:
                 events.append({"tool": tool, "event": "execution_attempt"})
                 events.append({"tool": tool, "event": "execution_failure", "error": result.get("error")})
@@ -354,24 +355,7 @@ def _registry_events(registry: ToolRegistry) -> list[dict[str, Any]]:
 
 
 def _tool_event_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
-    proposals = [event["tool"] for event in events if event.get("event") == "proposed" and event.get("tool")]
-    attempts = [event["tool"] for event in events if event.get("event") == "execution_attempt" and event.get("tool")]
-    successes = [event["tool"] for event in events if event.get("event") == "execution_success" and event.get("tool")]
-    failures = [event for event in events if event.get("event") == "execution_failure" and event.get("tool")]
-    rejections = [event["tool"] for event in events if event.get("event") == "policy_rejected" and event.get("tool")]
-    return {
-        "tool_events": events,
-        "tool_proposals": proposals,
-        "tool_calls": proposals,
-        "tool_execution_attempts_by_name": attempts,
-        "tool_execution_successes_by_name": successes,
-        "tool_execution_failures_by_name": [event["tool"] for event in failures],
-        "tool_failures": failures,
-        "tool_execution_attempts": len(attempts),
-        "tool_execution_successes": len(successes),
-        "tool_execution_failures": len(failures),
-        "tool_policy_rejections": len(rejections),
-    }
+    return tool_event_summary(events)
 
 
 def _runtime_confirmation(example: dict[str, Any]):
@@ -447,20 +431,14 @@ def _live_failure_stage(stage: str, record: dict[str, Any], reasons: list[str]) 
     if stopped_reason.startswith("llm_call_failed"):
         return "runtime"
     if not record.get("route_correct"):
-        return "router"
+        return "routing"
     if (
         record.get("final_status") == "final_answer"
         and not record.get("tool_proposals")
         and any("missing tool proposal" in reason for reason in reasons)
     ):
         return "runtime"
-    if stage == "routing":
-        return "router"
-    if stage == "runner":
-        return "runtime"
-    if not stage:
-        return "unknown"
-    return stage
+    return canonical_failure_stage(stage) or "unknown"
 
 
 def main() -> None:

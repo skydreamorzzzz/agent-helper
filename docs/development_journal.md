@@ -1016,3 +1016,155 @@ single_tool 是否应该像 web_lookup 一样强制 required_tool？
 ```
 
 同时 live dataset 还太小，下一阶段应该先扩展真实任务覆盖面，再根据 failure-stage distribution 决定是否优化 Runtime、Planner、Policy 或 Router。
+
+## Evaluation Cleanup + Live Dataset Expansion
+
+- 来源：Evaluation Cleanup + Live Dataset Expansion
+- 相关模块：`evals/agent/semantics.py`、`evals/agent/evaluators.py`、`evals/agent/runner.py`、`evals/agent/live_runner.py`、`evals/agent/report.py`、`evals/agent/live_dataset.jsonl`
+- 结论类型：measurement semantics cleanup，不是 Agent 行为优化
+
+### 为什么统一 evaluation semantics
+
+上一轮 live baseline 已经证明真实模型路径可跑通，但 deterministic 和 live 的 failure stage 命名还不完全一致：deterministic 使用 `routing` / `runner`，live 又把部分结果映射到 `router` / `runtime`。这会让两个 benchmark 在报告层看起来不可直接比较。
+
+本轮把 failure taxonomy 收敛为：
+
+```text
+routing
+planning
+plan_validation
+argument_resolution
+tool_execution
+permission
+memory
+recovery
+final_answer
+runtime
+unknown
+```
+
+兼容映射保留在 evaluation 层：旧的 `router` 会归一成 `routing`，旧的 `runner` 会归一成 `runtime`。这只改变报告和归因命名，不改变 task success semantics。
+
+### Tool proposal 语义
+
+之前 `tool_proposals` 同时承载了两种不同含义：
+
+- Runtime 路径中，来自模型输出的 `tool_call`；
+- Planner 路径中，从 `plan.steps` 推导出的计划步骤。
+
+这两者都对旧 expected contract 有用，但不能伪装成同一个观测指标。因此本轮新增拆分字段：
+
+```text
+model_tool_proposals    模型/runtime 实际提出的 tool_call
+planned_tool_steps      Planner 产出的计划工具步骤
+actual_tool_executions  真实进入 ToolRegistry 或 executor 的执行尝试
+```
+
+`tool_proposals` 暂时保留为 legacy assertion 字段，等于 `model_tool_proposals + planned_tool_steps`，用于兼容 deterministic 和 live dataset 中已有 expected contract。报告中现在同时展示 legacy 总数和拆分后的解释性指标。
+
+### 测试补充
+
+新增 evaluation 测试覆盖：
+
+- live dataset schema、ID 唯一性、case 数量和覆盖类别；
+- canonical failure taxonomy 与旧 stage alias；
+- report generation 中的拆分工具指标；
+- model proposal、planned step、actual execution 三者隔离；
+- deterministic planner record 与 live planner record 不互相污染；
+- runtime record 不产生 planned step。
+
+全量测试结果：
+
+```text
+126 passed
+```
+
+### Live dataset 扩展
+
+`evals/agent/live_dataset.jsonl` 从 10 条扩展到 35 条，dataset version 更新为：
+
+```text
+agent-live-e2e-v1.1
+```
+
+新增覆盖范围包括：
+
+- single_tool calculator / file read / file write / nested write / no-write boundary；
+- invalid tool arguments：division by zero、missing file、unsafe calculator expression、invalid calculator text；
+- planned task：read-transform-write、calculate-write、extract max、short summary、multi-file merge；
+- ambiguous request / missing target clarification；
+- policy / confirmation：single write rejection、overwrite rejection、planned write rejection、planned overwrite rejection；
+- memory retrieval：project name、language preference、no-tool memory answer；
+- Router 与 Runtime contract 冲突；
+- Planner / artifact failure boundary；
+- model protocol failure boundary；
+- 少量 web lookup 与 deep research case。
+
+web / deep research 只占少量 case，避免外部 API 成为整个 benchmark 的主要噪声来源。
+
+### 新 Live E2E baseline
+
+最终运行 artifact：
+
+```text
+evals/agent/results/live_20260813_221538/
+```
+
+配置：
+
+```text
+mode: live_e2e
+dataset version: agent-live-e2e-v1.1
+model: deepseek-v4-flash
+provider: https://api.deepseek.com
+tavily_configured: true
+```
+
+结果：
+
+```text
+overall live pass rate: 28/35 = 80.0%
+normal task pass rate: 24/30 = 80.0%
+regression case pass rate: 4/5 = 80.0%
+route accuracy: 33/35 = 94.3%
+average latency: 10092.3 ms
+average LLM calls: 2.43
+tool proposals (legacy assertions): 48
+model/runtime tool proposals: 16
+planned tool steps: 32
+tool execution attempts: 44
+tool execution successes: 38
+tool execution failures: 6
+tool policy rejections: 4
+retry count: 4
+replan count: 0
+```
+
+失败分布：
+
+```text
+tool_execution: 4
+runtime: 2
+routing: 1
+```
+
+代表性失败：
+
+- `live_010`：`single_tool` 路径没有强制 calculator 调用，模型直接 final answer，未触发 calculator invalid-argument contract。
+- `live_011`：calculator boundary 期望调用 calculator，但模型直接 final answer，未执行工具。
+- `live_023`：short summary artifact 缺少 expected content。
+- `live_024`：merge artifact 缺少两个来源文件的 expected content。
+- `live_030`：memory no-tool answer 期望 direct answer，实际 route 到 clarification。
+- `live_032`：existing file write 期望不 overwrite 并返回 `FileExistsError`，实际文件被覆盖。
+- `live_035`：deep research completed，但 expected report artifact 未生成。
+
+### 下一轮最值得优化什么
+
+不要先调 Router threshold，也不要改 embedding prototype。新的 failure distribution 指向更靠近执行 contract 的问题：
+
+1. Runtime / tool contract：`single_tool` 是否需要 required-tool 语义，尤其 invalid args 和 calculator boundary。
+2. Tool argument discipline：write overwrite 默认与模型参数之间的 contract 是否足够硬。
+3. Planner artifact guarantee：`completed` 是否必须绑定 expected artifact existence，尤其 deep research。
+4. Memory routing boundary：带有显式“根据记忆回答”的请求为什么会落到 clarification。
+
+这些都应该在下一轮作为优化候选，而不是本轮为了提高 live score 立即修改 Agent 行为。

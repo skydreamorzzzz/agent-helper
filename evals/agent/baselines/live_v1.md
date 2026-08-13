@@ -1,10 +1,10 @@
-# Live E2E Baseline v1
+# Live E2E Baseline v1.1
 
 - Evaluation mode: `live_e2e`
-- Dataset version: `agent-live-e2e-v1`
-- Dataset size: 10 live cases
-- Result artifact: `evals/agent/results/live_20260811_230109/`
-- Git commit reported by runner: `60dae79`
+- Dataset version: `agent-live-e2e-v1.1`
+- Dataset size: 35 live cases
+- Result artifact: `evals/agent/results/live_20260813_221538/`
+- Git commit reported by runner: `cafcb34`
 - LLM provider/base URL: `https://api.deepseek.com`
 - LLM model: `deepseek-v4-flash`
 - Router configuration: current `RequestRouter`; Router tuning frozen
@@ -14,67 +14,45 @@ This baseline calls the configured live LLM/API and runs the current Agent stack
 
 ## Summary
 
-- Overall live pass rate: 9/10 (90.0%)
-- Normal task pass rate: 9/9 (100.0%)
-- Regression case pass rate: 0/1 (0.0%)
-- Route accuracy: 10/10 (100.0%)
-- Average latency: 7384.3 ms
-- Average LLM calls: 2.10
-- Total LLM calls: 21
-- Total retry count: 0
+- Overall live pass rate: 28/35 (80.0%)
+- Normal task pass rate: 24/30 (80.0%)
+- Regression case pass rate: 4/5 (80.0%)
+- Route accuracy: 33/35 (94.3%)
+- Average latency: 10092.3 ms
+- Average LLM calls: 2.43
+- Total LLM calls: 85
+- Total retry count: 4
 - Total replan count: 0
 
 ## Tool Metrics
 
-- Tool proposals: 9
-- Tool execution attempts: 7
-- Tool execution successes: 7
-- Tool execution failures: 0
-- Tool policy rejections: 2
-- Tool execution success rate: 100.0%
+- Tool proposals (legacy assertions): 48
+- Model/runtime tool proposals: 16
+- Planned tool steps: 32
+- Tool execution attempts: 44
+- Tool execution successes: 38
+- Tool execution failures: 6
+- Tool policy rejections: 4
+- Tool execution success rate: 86.4%
 
-Policy rejections are counted separately from tool execution. In `live_007` and `live_008`, rejected write/overwrite confirmation correctly produced no file side effect.
-
-## Per Suite
-
-| Suite | Total | Passed | Pass Rate |
-|---|---:|---:|---:|
-| normal | 9 | 9 | 100.0% |
-| regression | 1 | 0 | 0.0% |
-
-## Per Category
-
-| Category | Total | Passed | Success Rate |
-|---|---:|---:|---:|
-| clarification | 1 | 1 | 100.0% |
-| direct_answer | 1 | 1 | 100.0% |
-| failure_boundary_invalid_tool_args | 1 | 0 | 0.0% |
-| memory_retrieval | 1 | 1 | 100.0% |
-| planned_calculate_write | 1 | 1 | 100.0% |
-| planned_file_task | 1 | 1 | 100.0% |
-| policy_confirmation_rejected | 1 | 1 | 100.0% |
-| policy_overwrite_rejected | 1 | 1 | 100.0% |
-| single_tool_calculator | 1 | 1 | 100.0% |
-| single_tool_file_read | 1 | 1 | 100.0% |
+`tool_proposals` remains a compatibility field for existing expected contracts. For interpretation, use `model_tool_proposals` for actual runtime model tool-call proposals, `planned_tool_steps` for Planner-authored steps, and `tool_execution_attempts_by_name` for actual execution attempts.
 
 ## Failure Stage Distribution
 
-- runtime: 1
+- tool_execution: 4
+- runtime: 2
+- routing: 1
 
-## Representative Failure
+## Representative Failures
 
-- `live_010` (`regression`, `failure_boundary_invalid_tool_args`): Router selected `single_tool`, but Runtime did not enforce a required calculator call for the `single_tool` route. The live model returned a direct safety refusal instead of calling `calculator` and surfacing the deterministic calculator validation error. User-visible behavior was safe, but the regression contract expected tool-level invalid-argument handling.
-
-## Failure Analysis
-
-The final run did not expose Router, Planner, Tool, Policy, or Memory failures in the normal suite. The only contract failure is a Runtime/protocol gap: `single_tool` is routed diagnostically, but ordinary `single_tool` execution uses the core `AgentRuntime` without a `required_tool`, so the model can answer directly.
-
-An earlier live run with the same dataset had a transient `llm_call_failed` on the file-read case after the tool call succeeded. That did not reproduce in the final baseline, but it suggests live E2E should continue separating deterministic integration failures from provider/runtime availability failures.
+- `live_010` (`failure_boundary_invalid_tool_args`, regression): route was `single_tool`, but the model directly returned a final answer instead of proposing `calculator`; this preserves the known Runtime contract gap from v1.
+- `live_011` (`single_tool_calculator_boundary`): route was `single_tool`, but the model answered directly instead of proposing `calculator`, so the explicit tool contract was not exercised.
+- `live_023` (`planned_short_summary`): plan completed and wrote `clean.md`, but the artifact did not preserve the expected `evaluation` content.
+- `live_024` (`planned_merge_files`): plan completed and wrote `merged.md`, but the artifact missed expected source content from both files.
+- `live_030` (`memory_retrieval_no_tool`): routed to clarification instead of answering from retrieved memory.
+- `live_032` (`single_tool_existing_write_without_overwrite`): write succeeded with overwrite semantics where the contract expected `FileExistsError`.
+- `live_035` (`deep_research_small`): deep research completed without creating the expected cited report file.
 
 ## Next Direction
 
-The next most valuable improvement is not Router threshold tuning. The data points to Runtime semantics for routed tool tasks:
-
-- decide whether `single_tool` should carry an explicit `required_tool` contract similar to `web_lookup`;
-- define how boundary/safety requests should be scored when direct refusal is safer than tool execution;
-- expand live dataset size before optimizing, especially with more adverse model outputs and flaky API cases.
+Do not optimize against this run immediately. The most useful next target is Runtime and tool-contract semantics, especially `single_tool` required-tool behavior, overwrite argument discipline, and whether deep-research completion should be tied to artifact existence. Router tuning remains frozen until these live failure contracts are interpreted.
