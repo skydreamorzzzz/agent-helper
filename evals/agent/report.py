@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+import hashlib
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -11,8 +12,19 @@ from evals.agent.semantics import canonical_failure_stage
 
 
 def compute_metrics(records: list[dict[str, Any]], *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    metadata = metadata or {}
+    mode = str(metadata.get("mode") or "")
     total = len(records)
-    passed = sum(1 for record in records if record.get("task_success"))
+    task_successes = sum(1 for record in records if record.get("task_success"))
+    execution_contract_passes = sum(
+        1 for record in records if record.get("execution_contract_pass", record.get("task_success"))
+    )
+    integration_passes = sum(
+        1
+        for record in records
+        if record.get("task_success") and record.get("execution_contract_pass", record.get("task_success"))
+    )
+    passed = task_successes if mode == "live_e2e" else integration_passes
     route_correct = sum(1 for record in records if record.get("route_correct"))
     tool_proposals = sum(len(record.get("tool_proposals") or []) for record in records)
     model_tool_proposals = sum(len(record.get("model_tool_proposals") or []) for record in records)
@@ -57,13 +69,22 @@ def compute_metrics(records: list[dict[str, Any]], *, metadata: dict[str, Any] |
         for record in records
         if not record.get("task_success")
     )
+    execution_failure_stage_distribution = Counter(
+        canonical_failure_stage(str(record.get("execution_failure_stage") or "")) or "unknown"
+        for record in records
+        if not record.get("execution_contract_pass", record.get("task_success"))
+    )
 
     return {
-        "metadata": metadata or {},
+        "metadata": metadata,
         "total": total,
         "passed": passed,
-        "overall_integration_pass_rate": passed / total if total else 0.0,
-        "overall_task_success_rate": passed / total if total else 0.0,
+        "task_successes": task_successes,
+        "execution_contract_passes": execution_contract_passes,
+        "integration_passes": integration_passes,
+        "overall_integration_pass_rate": integration_passes / total if total else 0.0,
+        "overall_task_success_rate": task_successes / total if total else 0.0,
+        "execution_contract_pass_rate": execution_contract_passes / total if total else 0.0,
         "normal_task_success_rate": suite_metrics.get("normal", {}).get("pass_rate", 0.0),
         "regression_case_pass_rate": suite_metrics.get("regression", {}).get("pass_rate", 0.0),
         "route_accuracy": route_correct / total if total else 0.0,
@@ -95,6 +116,7 @@ def compute_metrics(records: list[dict[str, Any]], *, metadata: dict[str, Any] |
         "per_suite": suite_metrics,
         "per_category": category_metrics,
         "failure_stage_distribution": dict(failure_stage_distribution),
+        "execution_contract_failure_stage_distribution": dict(execution_failure_stage_distribution),
         "route_distribution": dict(Counter(str(record.get("actual_route") or "") for record in records)),
         "representative_failures": [
             {
@@ -105,9 +127,25 @@ def compute_metrics(records: list[dict[str, Any]], *, metadata: dict[str, Any] |
                 "reasons": record.get("failure_reasons"),
                 "actual_route": record.get("actual_route"),
                 "stopped_reason": record.get("stopped_reason"),
+                "task_success": record.get("task_success"),
+                "execution_contract_pass": record.get("execution_contract_pass"),
             }
             for record in records
             if not record.get("task_success")
+        ][:8],
+        "representative_execution_contract_failures": [
+            {
+                "id": record.get("id"),
+                "category": record.get("category"),
+                "suite": record.get("suite"),
+                "execution_failure_stage": record.get("execution_failure_stage"),
+                "reasons": record.get("execution_failure_reasons"),
+                "actual_route": record.get("actual_route"),
+                "stopped_reason": record.get("stopped_reason"),
+                "task_success": record.get("task_success"),
+            }
+            for record in records
+            if not record.get("execution_contract_pass", record.get("task_success"))
         ][:8],
     }
 
@@ -145,6 +183,8 @@ def render_markdown(metrics: dict[str, Any]) -> str:
         f"- Mode: {mode}",
         f"- Dataset version: {metadata.get('dataset_version', 'unknown')}",
         f"- Git commit: {metadata.get('git_commit', 'unknown')}",
+        f"- Git dirty: {metadata.get('git_dirty', 'unknown')}",
+        f"- Dataset fingerprint: {metadata.get('dataset_fingerprint', 'unknown')}",
         f"- LLM model: {metadata.get('llm_model', 'unknown')}",
         f"- LLM provider/base URL: {metadata.get('llm_provider', metadata.get('llm_base_url', 'unknown'))}",
         f"- Router configuration: {metadata.get('router_configuration', 'current RequestRouter; router tuning frozen')}",
@@ -154,7 +194,15 @@ def render_markdown(metrics: dict[str, Any]) -> str:
         "",
         "## Summary",
         "",
-        f"- Overall integration pass rate: {metrics['passed']}/{metrics['total']} ({metrics['overall_integration_pass_rate']:.1%})",
+        (
+            f"- Overall task success rate: {metrics['task_successes']}/{metrics['total']} "
+            f"({metrics['overall_task_success_rate']:.1%})"
+            if mode == "live_e2e"
+            else f"- Overall integration pass rate: {metrics['integration_passes']}/{metrics['total']} "
+            f"({metrics['overall_integration_pass_rate']:.1%})"
+        ),
+        f"- Task success rate: {metrics['overall_task_success_rate']:.1%}",
+        f"- Execution contract pass rate: {metrics['execution_contract_pass_rate']:.1%}",
         f"- Normal task pass rate: {metrics['normal_task_success_rate']:.1%}",
         f"- Regression case pass rate: {metrics['regression_case_pass_rate']:.1%}",
         f"- Route accuracy: {metrics['route_accuracy']:.1%}",
@@ -194,6 +242,15 @@ def render_markdown(metrics: dict[str, Any]) -> str:
             lines.append(f"- {stage}: {count}")
     else:
         lines.append("- none")
+    lines.extend(["", "## Execution Contract Failure Stages", ""])
+    if metrics["execution_contract_failure_stage_distribution"]:
+        for stage, count in sorted(
+            metrics["execution_contract_failure_stage_distribution"].items(),
+            key=lambda item: (-item[1], item[0]),
+        ):
+            lines.append(f"- {stage}: {count}")
+    else:
+        lines.append("- none")
     lines.extend(["", "## Route Distribution", ""])
     for route, count in sorted(metrics["route_distribution"].items()):
         lines.append(f"- {route}: {count}")
@@ -207,11 +264,39 @@ def render_markdown(metrics: dict[str, Any]) -> str:
             )
     else:
         lines.append("- none")
+    lines.extend(["", "## Representative Execution Contract Failures", ""])
+    if metrics["representative_execution_contract_failures"]:
+        for failure in metrics["representative_execution_contract_failures"]:
+            reasons = "; ".join(str(reason) for reason in failure.get("reasons") or [])
+            lines.append(
+                f"- {failure['id']} suite={failure['suite']} category={failure['category']} "
+                f"stage={failure['execution_failure_stage']} route={failure['actual_route']} "
+                f"task_success={failure['task_success']} reason={failure['stopped_reason']}: {reasons}"
+            )
+    else:
+        lines.append("- none")
     return "\n".join(lines) + "\n"
 
 
 def git_commit() -> str:
     try:
         return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+    except Exception:
+        return "unknown"
+
+
+def git_dirty() -> bool | str:
+    try:
+        unstaged = subprocess.call(["git", "diff", "--quiet", "--"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        staged = subprocess.call(["git", "diff", "--cached", "--quiet", "--"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return bool(unstaged or staged)
+    except Exception:
+        return "unknown"
+
+
+def dataset_fingerprint(path: Path) -> str:
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return f"sha256:{digest[:16]}"
     except Exception:
         return "unknown"

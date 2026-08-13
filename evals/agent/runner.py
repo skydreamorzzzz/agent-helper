@@ -27,7 +27,7 @@ from src.tools.base import Tool, ToolExecutionError
 from src.tools.registry import ToolRegistry
 
 from evals.agent.evaluators import evaluate_task
-from evals.agent.report import git_commit, write_outputs
+from evals.agent.report import dataset_fingerprint, git_commit, git_dirty, write_outputs
 from evals.agent.semantics import tool_event_summary
 
 import src.planner.executor as executor_module
@@ -385,9 +385,13 @@ def run_case(example: dict[str, Any], *, root_dir: Path) -> CaseOutcome:
     record["latency_ms"] = round((time.perf_counter() - start) * 1000, 2)
     evaluation = evaluate_task(example, record, workspace_dir)
     record["task_success"] = evaluation.task_success
+    record["execution_contract_pass"] = evaluation.execution_contract_pass
     record["route_correct"] = evaluation.route_correct
     record["failure_stage"] = evaluation.failure_stage
+    record["execution_failure_stage"] = evaluation.execution_failure_stage
     record["failure_reasons"] = evaluation.failure_reasons
+    record["task_failure_reasons"] = evaluation.task_failure_reasons
+    record["execution_failure_reasons"] = evaluation.execution_failure_reasons
     return CaseOutcome(record=record, workspace_dir=workspace_dir)
 
 
@@ -537,8 +541,12 @@ def _empty_record(example: dict[str, Any]) -> dict[str, Any]:
         "stopped_reason": "",
         "final_answer": "",
         "task_success": False,
+        "execution_contract_pass": False,
         "failure_stage": "",
+        "execution_failure_stage": "",
         "failure_reasons": [],
+        "task_failure_reasons": [],
+        "execution_failure_reasons": [],
         "latency_ms": 0.0,
     }
 
@@ -775,6 +783,8 @@ def main() -> None:
         "mode": "deterministic_integration",
         "dataset_version": DATASET_VERSION,
         "git_commit": git_commit(),
+        "git_dirty": git_dirty(),
+        "dataset_fingerprint": dataset_fingerprint(Path(args.dataset)),
         "llm_model": "CountingFakeLLM",
         "router_configuration": "current RequestRouter; no Router threshold/prototype changes in this run",
     }

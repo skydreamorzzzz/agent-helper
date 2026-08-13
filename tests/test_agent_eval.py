@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from evals.agent import report
 from evals.agent import live_runner, runner
 from evals.agent.evaluators import evaluate_task
 from evals.agent.report import compute_metrics, render_markdown
@@ -35,6 +36,7 @@ def test_route_mismatch_but_task_succeeds(tmp_path: Path) -> None:
     result = evaluate_task(example, record, tmp_path)
 
     assert result.task_success is True
+    assert result.execution_contract_pass is True
     assert result.route_correct is False
     assert result.failure_stage == ""
 
@@ -70,8 +72,40 @@ def test_permission_rejection_is_safety_success(tmp_path: Path) -> None:
     result = evaluate_task(example, record, tmp_path)
 
     assert result.task_success is True
+    assert result.execution_contract_pass is True
     assert result.route_correct is True
     assert result.failure_stage == ""
+
+
+def test_tool_path_mismatch_does_not_fail_user_task(tmp_path: Path) -> None:
+    example = {
+        "id": "case",
+        "suite": "normal",
+        "expected_route": "single_tool",
+        "expected": {
+            "final_status": "final_answer",
+            "answer_contains": ["4"],
+            "tool_proposals": ["calculator"],
+            "tool_executions": ["calculator"],
+        },
+    }
+    record = {
+        "actual_route": "single_tool",
+        "final_status": "final_answer",
+        "stopped_reason": "final_answer",
+        "final_answer": "4",
+        "tool_proposals": [],
+        "tool_execution_attempts_by_name": [],
+        "tool_execution_failures": 0,
+    }
+
+    result = evaluate_task(example, record, tmp_path)
+
+    assert result.task_success is True
+    assert result.execution_contract_pass is False
+    assert result.failure_stage == ""
+    assert result.execution_failure_stage == "runtime"
+    assert "missing tool proposal: calculator" in result.execution_failure_reasons
 
 
 def test_tool_proposal_policy_rejection_is_not_execution_failure() -> None:
@@ -79,6 +113,7 @@ def test_tool_proposal_policy_rejection_is_not_execution_failure() -> None:
         {
             "suite": "normal",
             "task_success": True,
+            "execution_contract_pass": False,
             "route_correct": True,
             "tool_proposals": ["write_text_file"],
             "tool_execution_attempts": 0,
@@ -99,6 +134,8 @@ def test_tool_proposal_policy_rejection_is_not_execution_failure() -> None:
     assert metrics["tool_execution_attempts"] == 0
     assert metrics["tool_execution_success_rate"] == 1.0
     assert metrics["tool_policy_rejections"] == 1
+    assert metrics["overall_task_success_rate"] == 1.0
+    assert metrics["execution_contract_pass_rate"] == 0.0
 
 
 def test_tool_execution_failure_counts_as_execution_failure() -> None:
@@ -106,6 +143,7 @@ def test_tool_execution_failure_counts_as_execution_failure() -> None:
         {
             "suite": "normal",
             "task_success": False,
+            "execution_contract_pass": False,
             "route_correct": True,
             "failure_stage": "tool_execution",
             "tool_proposals": ["read_text_file"],
@@ -166,6 +204,23 @@ def test_report_renders_split_tool_proposal_metrics() -> None:
     assert "Planned tool steps: 1" in rendered
 
 
+def test_report_labels_live_task_success_and_deterministic_integration() -> None:
+    live_metrics = compute_metrics([_metric_record("normal", True)], metadata={"mode": "live_e2e"})
+    deterministic_metrics = compute_metrics(
+        [_metric_record("normal", True) | {"execution_contract_pass": False}],
+        metadata={"mode": "deterministic_integration"},
+    )
+
+    live_report = render_markdown(live_metrics)
+    deterministic_report = render_markdown(deterministic_metrics)
+
+    assert "Overall task success rate: 1/1 (100.0%)" in live_report
+    assert "Execution contract pass rate: 100.0%" in live_report
+    assert "Overall integration pass rate: 0/1 (0.0%)" in deterministic_report
+    assert "Task success rate: 100.0%" in deterministic_report
+    assert "Execution contract pass rate: 0.0%" in deterministic_report
+
+
 def test_tool_event_summary_separates_model_plan_and_execution() -> None:
     summary = tool_event_summary(
         [
@@ -223,6 +278,20 @@ def test_live_dataset_schema_and_coverage() -> None:
         assert example["expected_route"] in valid_routes
         assert example["suite"] in {"normal", "regression"}
         assert isinstance(example["expected"], dict)
+
+
+def test_git_dirty_metadata_ignores_untracked_files(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_call(args, stdout=None, stderr=None):
+        calls.append(tuple(args))
+        return 0
+
+    monkeypatch.setattr(report.subprocess, "call", fake_call)
+
+    assert report.git_dirty() is False
+    assert ("git", "diff", "--quiet", "--") in calls
+    assert ("git", "diff", "--cached", "--quiet", "--") in calls
 
 
 def test_planned_record_uses_planned_steps_not_model_proposals() -> None:
@@ -294,8 +363,10 @@ def test_failure_attribution_only_for_failed_contract(tmp_path: Path) -> None:
     )
 
     assert success.task_success is True
+    assert success.execution_contract_pass is True
     assert success.failure_stage == ""
     assert failure.task_success is False
+    assert failure.execution_contract_pass is True
     assert failure.failure_stage == "recovery"
 
 
@@ -303,6 +374,7 @@ def _metric_record(suite: str, success: bool) -> dict:
     return {
         "suite": suite,
         "task_success": success,
+        "execution_contract_pass": success,
         "route_correct": True,
         "failure_stage": "" if success else "final_answer",
         "tool_proposals": [],

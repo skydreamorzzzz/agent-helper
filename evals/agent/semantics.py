@@ -57,6 +57,49 @@ def stage_for_status(record: dict[str, Any]) -> str:
     return "final_answer"
 
 
+def infer_failure_stage(
+    example: dict[str, Any],
+    record: dict[str, Any],
+    reasons: list[str],
+    *,
+    contract: str = "task",
+) -> str:
+    if not reasons:
+        return ""
+    category = str(example.get("category") or "")
+    route_mismatch = record.get("actual_route") != str(example.get("expected_route") or "")
+    stopped_reason = str(record.get("stopped_reason") or "")
+    final_status = str(record.get("final_status") or "")
+
+    if "memory" in category:
+        return "memory"
+    if route_mismatch and contract == "task":
+        return "routing"
+    if "confirmation" in stopped_reason or "confirmation" in final_status or "policy" in stopped_reason:
+        return "permission"
+    if stopped_reason.startswith("llm_call_failed") or stopped_reason.startswith("runner_error"):
+        return "runtime"
+    if "planning_failed" in stopped_reason or "planning_failed" in final_status:
+        return "planning"
+    if any("validation" in reason for reason in reasons):
+        return "plan_validation"
+    if any("argument" in reason or "placeholder" in reason for reason in reasons):
+        return "argument_resolution"
+    if any("missing tool proposal" in reason for reason in reasons):
+        if record.get("final_status") == "final_answer" and not record.get("tool_proposals"):
+            return "runtime"
+        return "planning" if str(record.get("actual_route") or "") in ("planned_task", "deep_research") else "tool_execution"
+    if any("tool proposal" in reason or "tool execution" in reason for reason in reasons):
+        return "planning" if str(record.get("actual_route") or "") in ("planned_task", "deep_research") else "tool_execution"
+    if any("file" in reason or "artifact" in reason for reason in reasons):
+        return "tool_execution"
+    if "invalid_json" in stopped_reason or "model_parse_failed" in stopped_reason:
+        return "recovery"
+    if record.get("tool_execution_failures"):
+        return "tool_execution"
+    return stage_for_status(record)
+
+
 def tool_event_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     model_proposals = [
         str(event["tool"])

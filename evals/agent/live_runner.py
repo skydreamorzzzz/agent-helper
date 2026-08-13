@@ -26,8 +26,8 @@ from src.planner.validator import PlanValidator
 from src.tools.registry import ToolRegistry
 
 from evals.agent.evaluators import evaluate_task
-from evals.agent.report import git_commit, write_outputs
-from evals.agent.semantics import canonical_failure_stage, tool_event_summary
+from evals.agent.report import dataset_fingerprint, git_commit, git_dirty, write_outputs
+from evals.agent.semantics import tool_event_summary
 
 import src.planner.executor as executor_module
 import src.tools.file_tools as file_tools_module
@@ -89,9 +89,13 @@ def run_case(example: dict[str, Any], *, root_dir: Path, llm: CountingLLMClient,
     record["latency_ms"] = round((time.perf_counter() - start) * 1000, 2)
     evaluation = evaluate_task(example, record, workspace_dir)
     record["task_success"] = evaluation.task_success
+    record["execution_contract_pass"] = evaluation.execution_contract_pass
     record["route_correct"] = evaluation.route_correct
     record["failure_reasons"] = evaluation.failure_reasons
-    record["failure_stage"] = _live_failure_stage(evaluation.failure_stage, record, evaluation.failure_reasons)
+    record["task_failure_reasons"] = evaluation.task_failure_reasons
+    record["execution_failure_reasons"] = evaluation.execution_failure_reasons
+    record["failure_stage"] = evaluation.failure_stage
+    record["execution_failure_stage"] = evaluation.execution_failure_stage
     return CaseOutcome(record=record, workspace_dir=workspace_dir)
 
 
@@ -325,8 +329,12 @@ def _empty_record(example: dict[str, Any]) -> dict[str, Any]:
         "stopped_reason": "",
         "final_answer": "",
         "task_success": False,
+        "execution_contract_pass": False,
         "failure_stage": "",
+        "execution_failure_stage": "",
         "failure_reasons": [],
+        "task_failure_reasons": [],
+        "execution_failure_reasons": [],
         "latency_ms": 0.0,
     }
 
@@ -424,23 +432,6 @@ def _resolve_in(root: Path, relative_path: str) -> Path:
     return candidate
 
 
-def _live_failure_stage(stage: str, record: dict[str, Any], reasons: list[str]) -> str:
-    if record.get("task_success"):
-        return ""
-    stopped_reason = str(record.get("stopped_reason") or "")
-    if stopped_reason.startswith("llm_call_failed"):
-        return "runtime"
-    if not record.get("route_correct"):
-        return "routing"
-    if (
-        record.get("final_status") == "final_answer"
-        and not record.get("tool_proposals")
-        and any("missing tool proposal" in reason for reason in reasons)
-    ):
-        return "runtime"
-    return canonical_failure_stage(stage) or "unknown"
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run live LLM end-to-end agent evaluation.")
     parser.add_argument("--dataset", type=Path, default=DATASET_PATH)
@@ -479,6 +470,8 @@ def main() -> None:
         "mode": "live_e2e",
         "dataset_version": DATASET_VERSION,
         "git_commit": git_commit(),
+        "git_dirty": git_dirty(),
+        "dataset_fingerprint": dataset_fingerprint(args.dataset),
         "llm_model": settings.local_llm_model,
         "llm_provider": settings.local_llm_base_url,
         "llm_base_url": settings.local_llm_base_url,
